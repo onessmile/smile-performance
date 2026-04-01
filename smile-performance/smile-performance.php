@@ -7,7 +7,7 @@
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
- * GitHub Plugin URI: onessmile/smile-performance
+ * GitHub Plugin URI: onessmile/smile-performance/smile-performance
  * GitHub Branch:     main
  * Auto Update URI:   https://github.com/onessmile/smile-performance
  */
