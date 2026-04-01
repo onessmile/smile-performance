@@ -2327,3 +2327,43 @@ function spc_render_pagespeed_page() {
     $html .= '</div>';
     echo $html;
 }
+
+// ============================================================
+// プラグイン一覧にアップデート確認リンクを追加
+// ============================================================
+add_filter('plugin_action_links_smile-performance/smile-performance.php', 'spc_add_plugin_action_links');
+function spc_add_plugin_action_links($links) {
+    $check_url = wp_nonce_url(
+        add_query_arg(
+            ['action' => 'spc_force_update_check'],
+            admin_url('admin-post.php')
+        ),
+        'spc_force_update_check'
+    );
+    $check_link = '<a href="' . esc_url($check_url) . '">アップデートを確認</a>';
+    array_push($links, $check_link);
+    return $links;
+}
+
+add_action('admin_post_spc_force_update_check', 'spc_handle_force_update_check');
+function spc_handle_force_update_check() {
+    if (!current_user_can('manage_options')) wp_die('権限がありません');
+    check_admin_referer('spc_force_update_check');
+
+    // WordPressの更新キャッシュを削除して強制チェック
+    delete_site_transient('update_plugins');
+    wp_update_plugins();
+
+    wp_redirect(add_query_arg(
+        ['update_check' => '1'],
+        admin_url('plugins.php')
+    ));
+    exit;
+}
+
+// アップデート確認後の通知
+add_action('admin_notices', 'spc_update_check_notice');
+function spc_update_check_notice() {
+    if (!isset($_GET['update_check']) || !current_user_can('manage_options')) return;
+    echo '<div class="notice notice-success is-dismissible"><p>✅ Smile Performance のアップデート確認が完了しました。</p></div>';
+}
