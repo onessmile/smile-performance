@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.1
+ * Version:     1.11
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -625,7 +625,7 @@ function spc_yakuhan_fetch($type = 'all') {
         // ../fonts/YakuHanJP/ → https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanJP/
         // ../fonts/YakuHanMP/ → https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanMP/
         $css = str_replace(
-            ['url(../fonts/YakuHanJP/', 'url(../fonts/YakuHanMP/)'],
+            ['url(../fonts/YakuHanJP/', 'url(../fonts/YakuHanMP/'],
             ['url(https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanJP/', 'url(https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanMP/'],
             $css
         );
