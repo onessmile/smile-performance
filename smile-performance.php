@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.0
+ * Version:     1.1
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -1275,6 +1275,14 @@ function spc_add_admin_menu() {
     );
     add_submenu_page(
         'spc-settings',
+        'PageSpeed分析',
+        '📊 PageSpeed分析',
+        'manage_options',
+        'spc-pagespeed',
+        'spc_render_pagespeed_page'
+    );
+    add_submenu_page(
+        'spc-settings',
         'Cloudflare API連携',
         '☁ Cloudflare連携',
         'manage_options',
@@ -1966,4 +1974,356 @@ function spc_render_cf_page() {
     echo $purge_btn;
     echo $js;
     echo '</div>';
+}
+// ============================================================
+// PageSpeed分析 AJAXハンドラ
+// ============================================================
+add_action('wp_ajax_spc_pagespeed_analyze', 'spc_handle_pagespeed_analyze');
+function spc_handle_pagespeed_analyze() {
+    if (!current_user_can('manage_options')) wp_send_json_error('権限がありません');
+    check_ajax_referer('spc_pagespeed_nonce', 'nonce');
+
+    $url      = esc_url_raw(wp_unslash($_POST['url'] ?? ''));
+    $strategy = in_array($_POST['strategy'] ?? 'desktop', ['desktop', 'mobile'], true) ? $_POST['strategy'] : 'desktop';
+    $api_key  = get_option('spc_pagespeed_api_key', '');
+
+    if (empty($url)) wp_send_json_error('URLを入力してください');
+    if (empty($api_key)) wp_send_json_error('PageSpeed APIキーが設定されていません');
+
+    $api_url = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed'
+        . '?url=' . rawurlencode($url)
+        . '&strategy=' . $strategy
+        . '&category=performance&category=accessibility&category=best-practices&category=seo'
+        . '&locale=ja'
+        . '&key=' . $api_key;
+
+    $response = wp_remote_get($api_url, ['timeout' => 60, 'sslverify' => true]);
+
+    if (is_wp_error($response)) {
+        wp_send_json_error('APIリクエストエラー: ' . $response->get_error_message());
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if (!empty($data['error'])) {
+        wp_send_json_error('APIエラー: ' . ($data['error']['message'] ?? '不明なエラー'));
+    }
+
+    wp_send_json_success($data);
+}
+
+// APIキー保存ハンドラ
+add_action('admin_post_spc_pagespeed_save_key', 'spc_handle_pagespeed_save_key');
+function spc_handle_pagespeed_save_key() {
+    if (!current_user_can('manage_options')) wp_die('権限がありません');
+    check_admin_referer('spc_pagespeed_save_key');
+    $key = sanitize_text_field(wp_unslash($_POST['spc_pagespeed_api_key'] ?? ''));
+    update_option('spc_pagespeed_api_key', $key);
+    wp_redirect(add_query_arg(['page' => 'spc-pagespeed', 'key_saved' => '1'], admin_url('admin.php')));
+    exit;
+}
+
+// ============================================================
+// PageSpeed分析 管理画面
+// ============================================================
+function spc_render_pagespeed_page() {
+    if (!current_user_can('manage_options')) return;
+
+    $api_key     = get_option('spc_pagespeed_api_key', '');
+    $has_key     = !empty($api_key);
+    $masked_key  = $has_key ? substr($api_key, 0, 8) . '••••••••••••••••••••' : '';
+    $nonce       = wp_create_nonce('spc_pagespeed_nonce');
+    $save_nonce  = wp_nonce_field('spc_pagespeed_save_key', '_wpnonce', true, false);
+
+    $html = '<div class="wrap">';
+    $html .= '<h1>📊 PageSpeed分析</h1>';
+
+    if (isset($_GET['key_saved'])) {
+        $html .= '<div class="notice notice-success is-dismissible"><p>✅ APIキーを保存しました。</p></div>';
+    }
+
+    // APIキー設定
+    $html .= '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin:16px 0 24px;">';
+    $html .= '<h2 style="margin:0 0 12px;font-size:1em;color:#555;">🔑 PageSpeed Insights APIキー設定</h2>';
+    if ($has_key) {
+        // 保存済みの場合はマスク表示＋変更フォーム
+        $html .= '<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">';
+        $html .= '<span style="font-family:monospace;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;padding:6px 12px;color:#555;letter-spacing:2px;">••••••••••••••••••••••••••••••••</span>';
+        $html .= '<span style="font-size:12px;color:#1d7a1d;">✅ 設定済み</span>';
+        $html .= '<button type="button" class="button button-secondary" onclick="document.getElementById(\'spc_ps_key_form\').style.display=\'block\';this.style.display=\'none\';">変更する</button>';
+        $html .= '</div>';
+        $html .= '<div id="spc_ps_key_form" style="display:none;">';
+        $html .= '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">';
+        $html .= $save_nonce;
+        $html .= '<input type="hidden" name="action" value="spc_pagespeed_save_key">';
+        $html .= '<input type="password" name="spc_pagespeed_api_key" placeholder="新しいAPIキーを入力" style="width:360px;font-family:monospace;" autocomplete="off">';
+        $html .= '<button type="submit" class="button button-primary">保存</button>';
+        $html .= '</form>';
+        $html .= '</div>';
+    } else {
+        // 未設定の場合は入力フォームを表示
+        $html .= '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">';
+        $html .= $save_nonce;
+        $html .= '<input type="hidden" name="action" value="spc_pagespeed_save_key">';
+        $html .= '<input type="password" name="spc_pagespeed_api_key" placeholder="Google PageSpeed Insights APIキー" style="width:360px;font-family:monospace;" autocomplete="off">';
+        $html .= '<button type="submit" class="button button-primary">保存</button>';
+        $html .= '</form>';
+    }
+    $html .= '<p class="description" style="margin-top:8px;">Google Cloud Console → PageSpeed Insights API を有効化してAPIキーを取得してください。</p>';
+    $html .= '</div>';
+
+    if (!$has_key) {
+        $html .= '<div style="background:#fff8e1;border:1px solid #f0c040;border-radius:4px;padding:12px 16px;color:#7a5c00;">⚠️ APIキーが設定されていません。上のフォームからAPIキーを入力して保存してください。</div>';
+        $html .= '</div>';
+        echo $html;
+        return;
+    }
+
+    // 分析フォーム
+    $html .= '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:20px;">';
+    $html .= '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+    $html .= '<input type="url" id="spc_ps_url" value="' . esc_attr(home_url('/')) . '" placeholder="https://example.com" style="flex:1;min-width:260px;">';
+    $html .= '<select id="spc_ps_strategy" style="width:130px;">';
+    $html .= '<option value="desktop">デスクトップ</option>';
+    $html .= '<option value="mobile">モバイル</option>';
+    $html .= '</select>';
+    $html .= '<button type="button" id="spc_ps_btn" class="button button-primary" onclick="spcPsAnalyze()">分析開始</button>';
+    $html .= '</div>';
+    $html .= '<p class="description" style="margin-top:8px;">分析には10〜30秒かかります。</p>';
+    $html .= '</div>';
+
+    // 結果エリア
+    $html .= '<div id="spc_ps_result"></div>';
+
+    // JavaScript
+    $html .= '<script>';
+    $html .= 'var spc_ps_nonce = "' . esc_js($nonce) . '";';
+    $html .= 'var spc_ps_ajax = "' . esc_js(admin_url('admin-ajax.php')) . '";';
+
+    $html .= 'function spcPsAnalyze() {';
+    $html .= '  var url = document.getElementById("spc_ps_url").value.trim();';
+    $html .= '  var strategy = document.getElementById("spc_ps_strategy").value;';
+    $html .= '  var result = document.getElementById("spc_ps_result");';
+    $html .= '  if (!url) { alert("URLを入力してください"); return; }';
+    $html .= '  document.getElementById("spc_ps_btn").disabled = true;';
+    $html .= '  result.innerHTML = \'<div style="padding:2rem;text-align:center;color:#666;">⏳ 分析中... しばらくお待ちください</div>\';';
+    $html .= '  var fd = new FormData();';
+    $html .= '  fd.append("action","spc_pagespeed_analyze");';
+    $html .= '  fd.append("nonce", spc_ps_nonce);';
+    $html .= '  fd.append("url", url);';
+    $html .= '  fd.append("strategy", strategy);';
+    $html .= '  fetch(spc_ps_ajax, {method:"POST",body:fd})';
+    $html .= '  .then(r=>r.json()).then(res=>{';
+    $html .= '    document.getElementById("spc_ps_btn").disabled = false;';
+    $html .= '    if (!res.success) { result.innerHTML=\'<div style="color:#d63638;padding:1rem;">エラー: \'+res.data+\'</div>\'; return; }';
+    $html .= '    spcPsRender(res.data, url, strategy);';
+    $html .= '  }).catch(e=>{';
+    $html .= '    document.getElementById("spc_ps_btn").disabled = false;';
+    $html .= '    result.innerHTML=\'<div style="color:#d63638;padding:1rem;">通信エラー: \'+e.message+\'</div>\';';
+    $html .= '  });';
+    $html .= '}';
+
+    $html .= 'function spcScoreColor(s) {';
+    $html .= '  if (s>=90) return "#1d7a1d";';
+    $html .= '  if (s>=50) return "#ba7517";';
+    $html .= '  return "#d63638";';
+    $html .= '}';
+
+    $html .= 'function spcMetricColor(score) {';
+    $html .= '  if (score>=0.9) return "#1d7a1d";';
+    $html .= '  if (score>=0.5) return "#ba7517";';
+    $html .= '  return "#d63638";';
+    $html .= '}';
+
+    $html .= 'function spcFmt(val, unit) {';
+    $html .= '  if (val===undefined||val===null) return "-";';
+    $html .= '  if (unit==="millisecond") return (val/1000).toFixed(1)+" 秒";';
+    $html .= '  if (unit==="unitless") return val.toFixed(3);';
+    $html .= '  return val.toFixed(2);';
+    $html .= '}';
+
+    $html .= 'function spcPsRender(data, url, strategy) {';
+    $html .= '  var cats = data.lighthouseResult.categories;';
+    $html .= '  var audits = data.lighthouseResult.audits;';
+    $html .= '  var strategyLabel = strategy==="desktop" ? "デスクトップ" : "モバイル";';
+    $html .= '  var now = new Date().toLocaleString("ja-JP");';
+
+    // スコアカード
+    $html .= '  var html = \'<h2 style="border-left:4px solid #2271b1;padding-left:10px;margin:0 0 16px;">\'+url+\' [\'+strategyLabel+\']\</h2>\';';
+    $html .= '  var catList=[{k:"performance",l:"パフォーマンス"},{k:"accessibility",l:"ユーザー補助"},{k:"best-practices",l:"おすすめの方法"},{k:"seo",l:"SEO"}];';
+    $html .= '  html+=\'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">\';';
+    $html .= '  catList.forEach(function(c){';
+    $html .= '    var cat=cats[c.k]; var score=cat?Math.round(cat.score*100):"-";';
+    $html .= '    var color=typeof score==="number"?spcScoreColor(score):"#666";';
+    $html .= '    html+=\'<div style="background:#f8f8f8;border:1px solid #ddd;border-radius:4px;padding:16px;text-align:center;">\';';
+    $html .= '    html+=\'<div style="font-size:.8em;color:#666;margin-bottom:8px;">\'+c.l+\'</div>\';';
+    $html .= '    html+=\'<div style="font-size:2em;font-weight:bold;color:\'+color+\'">\'+score+\'</div></div>\';';
+    $html .= '  });';
+    $html .= '  html+=\'</div>\';';
+
+    // 主要指標
+    $html .= '  var metrics=[{id:"first-contentful-paint",l:"FCP"},{id:"largest-contentful-paint",l:"LCP"},{id:"total-blocking-time",l:"TBT"},{id:"cumulative-layout-shift",l:"CLS"},{id:"speed-index",l:"Speed Index"},{id:"interactive",l:"TTI"}];';
+    $html .= '  html+=\'<h3 style="margin:0 0 10px;font-size:1em;color:#555;">主要指標</h3>\';';
+    $html .= '  html+=\'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">\';';
+    $html .= '  metrics.forEach(function(m){';
+    $html .= '    var a=audits[m.id]; if(!a) return;';
+    $html .= '    var color=spcMetricColor(a.score||0);';
+    $html .= '    html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;padding:12px;">\';';
+    $html .= '    html+=\'<div style="font-size:.8em;color:#666;margin-bottom:4px;">\'+m.l+\'</div>\';';
+    $html .= '    html+=\'<div style="font-size:1.4em;font-weight:bold;color:\'+color+\'">\'+spcFmt(a.numericValue,a.numericUnit)+\'</div></div>\';';
+    $html .= '  });';
+    $html .= '  html+=\'</div>\';';
+
+    // 改善が必要な項目
+    $html .= '  var skipIds=["screenshot-thumbnails","final-screenshot","full-page-screenshot","network-requests","main-thread-tasks","metrics","resource-summary","third-party-summary","uses-long-cache-ttl","user-timings","largest-contentful-paint-element","lcp-lazy-loaded"];';
+    $html .= '  var failed=Object.values(audits).filter(function(a){';
+    $html .= '    return a.score!==null&&a.score!==undefined&&a.score<0.9&&a.title&&skipIds.indexOf(a.id)===-1;';
+    $html .= '  }).sort(function(a,b){return (a.score||0)-(b.score||0);}).slice(0,10);';
+    $html .= '  if(failed.length>0){';
+    $html .= '    html+=\'<h3 style="margin:0 0 10px;font-size:1em;color:#555;">改善が必要な項目</h3>\';';
+    $html .= '    failed.forEach(function(a){';
+    $html .= '      var color=a.score>=0.5?"#ba7517":"#d63638";';
+    $html .= '      var icon=a.score>=0.5?"△":"▲";';
+    $html .= '      var saving=a.details&&a.details.overallSavingsMs?" (推定削減: "+Math.round(a.details.overallSavingsMs)+"ms)":"";';
+    $html .= '      var desc=(a.description||"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").substring(0,200);';
+    $html .= '      var scoreDisp=a.score!==null?Math.round(a.score*100)+"点":"-";';
+    $html .= '      html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;padding:12px 14px;margin-bottom:8px;">\';';
+    $html .= '      html+=\'<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;">\';';
+    $html .= '      html+=\'<span style="color:\'+color+\';flex-shrink:0;font-size:14px;margin-top:1px;">\'+icon+\'</span>\';';
+    $html .= '      html+=\'<div style="flex:1;">\';';
+    $html .= '      html+=\'<strong style="font-size:13px;">\'+a.title+\'</strong>\';';
+    $html .= '      html+=\'<span style="font-size:11px;color:#888;margin-left:8px;">スコア: \'+scoreDisp+\'</span>\';';
+    $html .= '      if(saving) html+=\'<span style="font-size:12px;color:#ba7517;margin-left:8px;">\'+saving+\'</span>\';';
+    $html .= '      html+=\'</div></div>\';';
+    $html .= '      if(desc) html+=\'<div style="font-size:12px;color:#555;padding-left:22px;margin-bottom:6px;line-height:1.6;">\'+desc+\'</div>\';';
+    // 詳細テーブル（URLリストなど）
+    $html .= '      if(a.details&&a.details.type==="table"&&a.details.items&&a.details.items.length>0){';
+    $html .= '        var items=a.details.items.slice(0,5);';
+    $html .= '        var headings=a.details.headings||[];';
+    $html .= '        html+=\'<div style="padding-left:22px;overflow-x:auto;">\';';
+    $html .= '        html+=\'<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px;">\';';
+    $html .= '        if(headings.length>0){';
+    $html .= '          html+=\'<thead><tr>\';';
+    $html .= '          headings.forEach(function(h){';
+    $html .= '            html+=\'<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;color:#555;font-weight:500;">\'+((h.label||h.key)||"")+\'</th>\';';
+    $html .= '          });';
+    $html .= '          html+=\'</tr></thead>\';';
+    $html .= '        }';
+    $html .= '        html+=\'<tbody>\';';
+    $html .= '        items.forEach(function(item){';
+    $html .= '          html+=\'<tr>\';';
+    $html .= '          if(headings.length>0){';
+    $html .= '            headings.forEach(function(h){';
+    $html .= '              var key=h.key; var val=item[key];';
+    $html .= '              var disp="";';
+    $html .= '              if(val===undefined||val===null) disp="-";';
+    $html .= '              else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,60))+(val.url&&val.url.length>60?"...":"")+\'</span>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="bytes") disp=Math.round((val.value||0)/1024)+" KiB";';
+    $html .= '              else if(typeof val==="object"&&val.type==="timespanMs") disp=Math.round(val.value||0)+" ms";';
+    $html .= '              else if(typeof val==="object"&&val.type==="ms") disp=Math.round(val.value||0)+" ms";';
+    $html .= '              else if(typeof val==="object"&&val.type==="thumbnail") disp="[画像]";';
+    $html .= '              else if(typeof val==="object"&&val.type==="node"&&val.nodeLabel) disp=\'<span style="word-break:break-all;font-size:11px;">\'+String(val.nodeLabel).substring(0,60)+\'</span>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="node") disp="[要素]";';
+    $html .= '              else if(typeof val==="object"&&val.type==="code"&&val.value) disp=\'<code style="font-size:11px;">\'+String(val.value).substring(0,60)+\'</code>\';';
+    $html .= '              else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,60);';
+    $html .= '              else if(typeof val==="object") disp="-";';
+    $html .= '              else disp=String(val).substring(0,80);';
+    $html .= '              html+=\'<td style="padding:4px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
+    $html .= '            });';
+    $html .= '          }';
+    $html .= '          html+=\'</tr>\';';
+    $html .= '        });';
+    $html .= '        html+=\'</tbody></table>\';';
+    $html .= '        if(a.details.items.length>5) html+=\'<div style="font-size:11px;color:#888;margin-top:4px;">他 \'+( a.details.items.length-5)+\'件</div>\';';
+    $html .= '        html+=\'</div>\';';
+    $html .= '      }';
+    $html .= '      html+=\'</div>\';';
+    $html .= '    });';
+    $html .= '  }';
+
+    // AIプロンプト生成エリア
+    $html .= '  var textLines=[];';
+    $html .= '  textLines.push("# PageSpeed Insights 分析結果");';
+    $html .= '  textLines.push("URL: "+url);';
+    $html .= '  textLines.push("デバイス: "+strategyLabel);';
+    $html .= '  textLines.push("取得日時: "+now);';
+    $html .= '  textLines.push("");';
+    $html .= '  textLines.push("## スコア");';
+    $html .= '  catList.forEach(function(c){';
+    $html .= '    var cat=cats[c.k]; var score=cat?Math.round(cat.score*100):"-";';
+    $html .= '    textLines.push(c.l+": "+score);';
+    $html .= '  });';
+    $html .= '  textLines.push("");';
+    $html .= '  textLines.push("## 主要指標");';
+    $html .= '  metrics.forEach(function(m){';
+    $html .= '    var a=audits[m.id]; if(!a) return;';
+    $html .= '    textLines.push(m.l+": "+spcFmt(a.numericValue,a.numericUnit));';
+    $html .= '  });';
+    $html .= '  textLines.push("");';
+    $html .= '  textLines.push("## 改善が必要な項目");';
+    $html .= '  failed.forEach(function(a){';
+    $html .= '    var saving=a.details&&a.details.overallSavingsMs?" (推定削減: "+Math.round(a.details.overallSavingsMs)+"ms)":"";';
+    $html .= '    var scoreDisp=a.score!==null?Math.round(a.score*100)+"点":"-";';
+    $html .= '    textLines.push("### "+a.title+" [スコア: "+scoreDisp+"]"+saving);';
+    $html .= '    var desc=(a.description||"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").substring(0,200);';
+    $html .= '    if(desc) textLines.push("説明: "+desc);';
+    $html .= '    if(a.details&&a.details.type==="table"&&a.details.items&&a.details.items.length>0){';
+    $html .= '      a.details.items.slice(0,3).forEach(function(item){';
+    $html .= '        var headings=a.details.headings||[];';
+    $html .= '        var parts=[];';
+    $html .= '        headings.forEach(function(h){';
+    $html .= '          var val=item[h.key]; if(val===undefined||val===null) return;';
+    $html .= '          var disp="";';
+    $html .= '          if(typeof val==="object"&&val.type==="url") disp=(val.url||"").substring(0,80);';
+    $html .= '          else if(typeof val==="object"&&val.type==="bytes") disp=Math.round((val.value||0)/1024)+"KiB";';
+    $html .= '          else if(typeof val==="object"&&val.type==="timespanMs") disp=Math.round(val.value||0)+"ms";';
+    $html .= '          else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value);';
+    $html .= '          else disp=String(val).substring(0,80);';
+    $html .= '          if(disp) parts.push((h.label||h.key)+": "+disp);';
+    $html .= '        });';
+    $html .= '        if(parts.length>0) textLines.push("  - "+parts.join(" | "));';
+    $html .= '      });';
+    $html .= '      if(a.details.items.length>3) textLines.push("  ... 他"+(a.details.items.length-3)+"件");';
+    $html .= '    }';
+    $html .= '    textLines.push("");';
+    $html .= '  });';
+
+    $html .= '  var prompt = "以下はPageSpeed Insightsの計測結果です。\n"';
+    $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\n"';
+    $html .= '    +"以下の点を踏まえて分析・提案してください。\n\n"';
+    $html .= '    +"1. スコアと主要指標の現状評価（良い点・問題点）\n"';
+    $html .= '    +"2. 改善が必要な項目の優先順位と具体的な対処方法\n"';
+    $html .= '    +"3. プラグインや設定で対応できる項目とBricks Builder側で対応すべき項目の分類\n"';
+    $html .= '    +"4. 対応難易度別（簡単・中程度・難しい）の改善ロードマップ\n\n"';
+    $html .= '    +textLines.join("\n");';
+
+    $html .= '  html+=\'<div style="margin-top:24px;background:#f0f6fc;border:1px solid #72aee6;border-radius:4px;padding:16px 20px;">\';';
+    $html .= '  html+=\'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">\';';
+    $html .= '  html+=\'<h3 style="margin:0;font-size:1em;color:#0073aa;">🤖 AI分析プロンプト（クリップボードにコピーしてAIに貼り付け）</h3>\';';
+    $html .= '  html+=\'<button type="button" onclick="spcCopyPrompt()" class="button button-secondary" style="flex-shrink:0;">📋 コピー</button>\';';
+    $html .= '  html+=\'</div>\';';
+    $html .= '  html+=\'<textarea id="spc_ps_prompt" rows="12" style="width:100%;font-family:monospace;font-size:12px;background:#fff;border:1px solid #aed6f1;border-radius:3px;padding:10px;box-sizing:border-box;" readonly>\'+prompt+\'</textarea>\';';
+    $html .= '  html+=\'</div>\';';
+
+    $html .= '  document.getElementById("spc_ps_result").innerHTML=html;';
+    $html .= '  document.getElementById("spc_ps_prompt").value=prompt;';
+    $html .= '}';
+
+    $html .= 'function spcCopyPrompt() {';
+    $html .= '  var ta = document.getElementById("spc_ps_prompt");';
+    $html .= '  ta.select();';
+    $html .= '  document.execCommand("copy");';
+    $html .= '  var btn = event.target;';
+    $html .= '  btn.textContent="✅ コピーしました";';
+    $html .= '  setTimeout(function(){ btn.textContent="📋 コピー"; }, 2000);';
+    $html .= '}';
+
+    $html .= 'document.addEventListener("keydown", function(e){';
+    $html .= '  if (e.key==="Enter" && document.activeElement.id==="spc_ps_url") spcPsAnalyze();';
+    $html .= '});';
+    $html .= '</script>';
+
+    $html .= '</div>';
+    echo $html;
 }
