@@ -621,6 +621,15 @@ function spc_yakuhan_fetch($type = 'all') {
         $css = wp_remote_retrieve_body($response);
         if (empty($css)) { $results[$key] = false; continue; }
 
+        // 相対パスのフォントURLをJSDelivrの絶対URLに書き換え
+        // ../fonts/YakuHanJP/ → https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanJP/
+        // ../fonts/YakuHanMP/ → https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanMP/
+        $css = str_replace(
+            ['url(../fonts/YakuHanJP/', 'url(../fonts/YakuHanMP/)'],
+            ['url(https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanJP/', 'url(https://cdn.jsdelivr.net/npm/yakuhanjp@4.1.1/dist/fonts/YakuHanMP/'],
+            $css
+        );
+
         file_put_contents($file['path'], $css, LOCK_EX);
         $results[$key] = true;
     }
