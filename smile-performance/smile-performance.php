@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.11
+ * Version:     1.12
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -843,10 +843,15 @@ function spc_defer_scroll_timeline($tag, $handle, $src) {
 // LCPヒーロー画像preload出力（URL直接入力方式）
 function spc_output_lcp_preload() {
     if (is_admin()) return;
-    $s   = spc_get_settings();
-    $url = $s['tuning_lcp_preload_url'] ?? '';
-    if (empty($url)) return;
-    echo '<link rel="preload" as="image" href="' . esc_url($url) . '" fetchpriority="high">' . "\n";
+    $s    = spc_get_settings();
+    $urls = $s['tuning_lcp_preload_url'] ?? '';
+    if (empty($urls)) return;
+    $url_list = array_filter(array_map('trim', explode("\n", $urls)));
+    foreach ($url_list as $url) {
+        if (!empty($url)) {
+            echo '<link rel="preload" as="image" href="' . esc_url($url) . '" fetchpriority="high">' . "\n";
+        }
+    }
 }
 
 // フォントpreload出力（Bricksローカルフォントのwoff2をpreload）
@@ -1298,6 +1303,14 @@ function spc_add_admin_menu() {
         'spc-cloudflare',
         'spc_render_cf_page'
     );
+    add_submenu_page(
+        'spc-settings',
+        '更新履歴',
+        '📋 更新履歴',
+        'manage_options',
+        'spc-changelog',
+        'spc_render_changelog_page'
+    );
 }
 
 add_action('admin_init', 'spc_register_settings');
@@ -1333,7 +1346,10 @@ function spc_sanitize_settings($input) {
     foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache'] as $key) {
         $s[$key] = !empty($input[$key]) ? 1 : 0;
     }
-    $s['tuning_lcp_preload_url'] = esc_url_raw($input['tuning_lcp_preload_url'] ?? '');
+    $lcp_urls = $input['tuning_lcp_preload_url'] ?? '';
+    $lcp_url_lines = array_filter(array_map('trim', explode("\n", $lcp_urls)));
+    $lcp_url_sanitized = array_map('esc_url_raw', $lcp_url_lines);
+    $s['tuning_lcp_preload_url'] = implode("\n", $lcp_url_sanitized);
 
     // ブラウザキャッシュ .htaccess 書き込み制御
     $prev = get_option('spc_settings', []);
@@ -1707,10 +1723,10 @@ function spc_render_settings_page() {
     $lcp_chk = $lcp_preload_enabled ? ' checked' : '';
     $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;margin-top:6px;">';
     $html .= '<input type="checkbox" id="spc_lcp_preload_toggle" name="spc_settings[tuning_lcp_preload]" value="1"' . $lcp_chk . ' onchange="spcToggleLcpUrl(this)" style="margin-top:2px;">';
-    $html .= '<span><strong>LCPヒーロー画像preload</strong><br><span style="font-size:.85em;color:#666;">ヒーロー画像のURLを指定してpreloadします。固定URLの場合に有効。動的データ・スライダーの場合は1枚目のURLを入力。</span></span></label>';
+    $html .= '<span><strong>LCPヒーロー画像preload</strong><br><span style="font-size:.85em;color:#666;">ヒーロー画像のURLを指定してpreloadします。PC・モバイルで異なる画像の場合は両方のURLを入力してください。</span></span></label>';
     $html .= '<div id="spc_lcp_url_wrap" style="' . $lcp_vis . 'padding-left:24px;margin-bottom:10px;">';
-    $html .= '<input type="url" name="spc_settings[tuning_lcp_preload_url]" value="' . esc_attr($lcp_preload_url) . '" placeholder="https://example.com/wp-content/uploads/hero.webp" style="width:100%;max-width:560px;">';
-    $html .= '<p class="description">メディアライブラリから画像URLをコピーして貼り付けてください。</p></div>';
+    $html .= '<textarea name="spc_settings[tuning_lcp_preload_url]" rows="3" style="width:100%;max-width:560px;font-family:monospace;font-size:12px;" placeholder="https://example.com/wp-content/uploads/hero-pc.webp&#10;https://example.com/wp-content/uploads/hero-sp.webp">' . esc_textarea($lcp_preload_url) . '</textarea>';
+    $html .= '<p class="description">1行に1URLで複数入力可能です。メディアライブラリから画像URLをコピーして貼り付けてください。</p></div>';
     $html .= '</td></tr>';
 
     // フォームnonce
@@ -2188,65 +2204,148 @@ function spc_render_pagespeed_page() {
     $html .= '  var skipIds=["screenshot-thumbnails","final-screenshot","full-page-screenshot","network-requests","main-thread-tasks","metrics","resource-summary","third-party-summary","uses-long-cache-ttl","user-timings","largest-contentful-paint-element","lcp-lazy-loaded"];';
     $html .= '  var failed=Object.values(audits).filter(function(a){';
     $html .= '    return a.score!==null&&a.score!==undefined&&a.score<0.9&&a.title&&skipIds.indexOf(a.id)===-1;';
-    $html .= '  }).sort(function(a,b){return (a.score||0)-(b.score||0);}).slice(0,10);';
+    $html .= '  }).sort(function(a,b){return (a.score||0)-(b.score||0);}).slice(0,15);';
     $html .= '  if(failed.length>0){';
     $html .= '    html+=\'<h3 style="margin:0 0 10px;font-size:1em;color:#555;">改善が必要な項目</h3>\';';
-    $html .= '    failed.forEach(function(a){';
+    $html .= '    failed.forEach(function(a,idx){';
     $html .= '      var color=a.score>=0.5?"#ba7517":"#d63638";';
     $html .= '      var icon=a.score>=0.5?"△":"▲";';
-    $html .= '      var saving=a.details&&a.details.overallSavingsMs?" (推定削減: "+Math.round(a.details.overallSavingsMs)+"ms)":"";';
-    $html .= '      var desc=(a.description||"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").substring(0,200);';
+    $html .= '      var saving=a.details&&a.details.overallSavingsMs?" — 推定削減: "+Math.round(a.details.overallSavingsMs)+"ms":"";';
+    $html .= '      var desc=(a.description||"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1");';
     $html .= '      var scoreDisp=a.score!==null?Math.round(a.score*100)+"点":"-";';
-    $html .= '      html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;padding:12px 14px;margin-bottom:8px;">\';';
-    $html .= '      html+=\'<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;">\';';
-    $html .= '      html+=\'<span style="color:\'+color+\';flex-shrink:0;font-size:14px;margin-top:1px;">\'+icon+\'</span>\';';
-    $html .= '      html+=\'<div style="flex:1;">\';';
-    $html .= '      html+=\'<strong style="font-size:13px;">\'+a.title+\'</strong>\';';
-    $html .= '      html+=\'<span style="font-size:11px;color:#888;margin-left:8px;">スコア: \'+scoreDisp+\'</span>\';';
-    $html .= '      if(saving) html+=\'<span style="font-size:12px;color:#ba7517;margin-left:8px;">\'+saving+\'</span>\';';
-    $html .= '      html+=\'</div></div>\';';
-    $html .= '      if(desc) html+=\'<div style="font-size:12px;color:#555;padding-left:22px;margin-bottom:6px;line-height:1.6;">\'+desc+\'</div>\';';
-    // 詳細テーブル（URLリストなど）
+    $html .= '      var detailId="spc_audit_"+idx;';
+
+    // 詳細コンテンツを生成する関数
+    $html .= '      var detailHtml="";';
+
+    // 説明文
+    $html .= '      if(desc) detailHtml+=\'<div style="font-size:12px;color:#555;margin-bottom:10px;line-height:1.7;">\'+desc+\'</div>\';';
+
+    // table形式
     $html .= '      if(a.details&&a.details.type==="table"&&a.details.items&&a.details.items.length>0){';
-    $html .= '        var items=a.details.items.slice(0,5);';
+    $html .= '        var items=a.details.items.slice(0,8);';
     $html .= '        var headings=a.details.headings||[];';
-    $html .= '        html+=\'<div style="padding-left:22px;overflow-x:auto;">\';';
-    $html .= '        html+=\'<table style="width:100%;border-collapse:collapse;font-size:11px;margin-top:4px;">\';';
+    $html .= '        detailHtml+=\'<div style="overflow-x:auto;">\';';
+    $html .= '        detailHtml+=\'<table style="width:100%;border-collapse:collapse;font-size:11px;">\';';
     $html .= '        if(headings.length>0){';
-    $html .= '          html+=\'<thead><tr>\';';
-    $html .= '          headings.forEach(function(h){';
-    $html .= '            html+=\'<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;color:#555;font-weight:500;">\'+((h.label||h.key)||"")+\'</th>\';';
-    $html .= '          });';
-    $html .= '          html+=\'</tr></thead>\';';
+    $html .= '          detailHtml+=\'<thead><tr>\';';
+    $html .= '          headings.forEach(function(h){ detailHtml+=\'<th style="text-align:left;padding:5px 8px;background:#f5f5f5;border:1px solid #e0e0e0;color:#555;font-weight:500;white-space:nowrap;">\'+((h.label||h.key)||"")+\'</th>\'; });';
+    $html .= '          detailHtml+=\'</tr></thead>\';';
     $html .= '        }';
-    $html .= '        html+=\'<tbody>\';';
+    $html .= '        detailHtml+=\'<tbody>\';';
     $html .= '        items.forEach(function(item){';
-    $html .= '          html+=\'<tr>\';';
+    $html .= '          detailHtml+=\'<tr>\';';
     $html .= '          if(headings.length>0){';
     $html .= '            headings.forEach(function(h){';
-    $html .= '              var key=h.key; var val=item[key];';
-    $html .= '              var disp="";';
+    $html .= '              var key=h.key; var val=item[key]; var disp="";';
     $html .= '              if(val===undefined||val===null) disp="-";';
-    $html .= '              else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,60))+(val.url&&val.url.length>60?"...":"")+\'</span>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,80))+(val.url&&val.url.length>80?"...":"")+\'</span>\';';
     $html .= '              else if(typeof val==="object"&&val.type==="bytes") disp=Math.round((val.value||0)/1024)+" KiB";';
-    $html .= '              else if(typeof val==="object"&&val.type==="timespanMs") disp=Math.round(val.value||0)+" ms";';
-    $html .= '              else if(typeof val==="object"&&val.type==="ms") disp=Math.round(val.value||0)+" ms";';
+    $html .= '              else if(typeof val==="object"&&(val.type==="timespanMs"||val.type==="ms")) disp=Math.round(val.value||0)+" ms";';
     $html .= '              else if(typeof val==="object"&&val.type==="thumbnail") disp="[画像]";';
-    $html .= '              else if(typeof val==="object"&&val.type==="node"&&val.nodeLabel) disp=\'<span style="word-break:break-all;font-size:11px;">\'+String(val.nodeLabel).substring(0,60)+\'</span>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="node"&&val.nodeLabel) disp=\'<code style="font-size:10px;word-break:break-all;">\'+String(val.nodeLabel).substring(0,80)+\'</code>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="node"&&val.snippet) disp=\'<code style="font-size:10px;word-break:break-all;">\'+String(val.snippet).substring(0,80)+\'</code>\';';
     $html .= '              else if(typeof val==="object"&&val.type==="node") disp="[要素]";';
-    $html .= '              else if(typeof val==="object"&&val.type==="code"&&val.value) disp=\'<code style="font-size:11px;">\'+String(val.value).substring(0,60)+\'</code>\';';
-    $html .= '              else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,60);';
+    $html .= '              else if(typeof val==="object"&&val.type==="code"&&val.value) disp=\'<code style="font-size:10px;word-break:break-all;">\'+String(val.value).substring(0,80)+\'</code>\';';
+    $html .= '              else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,80);';
     $html .= '              else if(typeof val==="object") disp="-";';
-    $html .= '              else disp=String(val).substring(0,80);';
-    $html .= '              html+=\'<td style="padding:4px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
+    $html .= '              else disp=String(val).substring(0,100);';
+    $html .= '              detailHtml+=\'<td style="padding:5px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
     $html .= '            });';
     $html .= '          }';
-    $html .= '          html+=\'</tr>\';';
+    $html .= '          detailHtml+=\'</tr>\';';
     $html .= '        });';
-    $html .= '        html+=\'</tbody></table>\';';
-    $html .= '        if(a.details.items.length>5) html+=\'<div style="font-size:11px;color:#888;margin-top:4px;">他 \'+( a.details.items.length-5)+\'件</div>\';';
-    $html .= '        html+=\'</div>\';';
+    $html .= '        detailHtml+=\'</tbody></table>\';';
+    $html .= '        if(a.details.items.length>8) detailHtml+=\'<div style="font-size:11px;color:#888;margin-top:4px;">他 \'+(a.details.items.length-8)+\'件</div>\';';
+    $html .= '        detailHtml+=\'</div>\';';
     $html .= '      }';
+
+    // opportunity形式（推定削減量あり）
+    $html .= '      else if(a.details&&a.details.type==="opportunity"&&a.details.items&&a.details.items.length>0){';
+    $html .= '        var items=a.details.items.slice(0,8);';
+    $html .= '        var headings=a.details.headings||[];';
+    $html .= '        detailHtml+=\'<div style="overflow-x:auto;">\';';
+    $html .= '        detailHtml+=\'<table style="width:100%;border-collapse:collapse;font-size:11px;">\';';
+    $html .= '        if(headings.length>0){';
+    $html .= '          detailHtml+=\'<thead><tr>\';';
+    $html .= '          headings.forEach(function(h){ detailHtml+=\'<th style="text-align:left;padding:5px 8px;background:#f5f5f5;border:1px solid #e0e0e0;color:#555;font-weight:500;">\'+((h.label||h.key)||"")+\'</th>\'; });';
+    $html .= '          detailHtml+=\'</tr></thead>\';';
+    $html .= '        }';
+    $html .= '        detailHtml+=\'<tbody>\';';
+    $html .= '        items.forEach(function(item){';
+    $html .= '          detailHtml+=\'<tr>\';';
+    $html .= '          if(headings.length>0){';
+    $html .= '            headings.forEach(function(h){';
+    $html .= '              var key=h.key; var val=item[key]; var disp="";';
+    $html .= '              if(val===undefined||val===null) disp="-";';
+    $html .= '              else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,80))+(val.url&&val.url.length>80?"...":"")+\'</span>\';';
+    $html .= '              else if(typeof val==="object"&&val.type==="bytes") disp=Math.round((val.value||0)/1024)+" KiB";';
+    $html .= '              else if(typeof val==="object"&&(val.type==="timespanMs"||val.type==="ms")) disp=Math.round(val.value||0)+" ms";';
+    $html .= '              else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,80);';
+    $html .= '              else if(typeof val==="object") disp="-";';
+    $html .= '              else disp=String(val).substring(0,100);';
+    $html .= '              detailHtml+=\'<td style="padding:5px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
+    $html .= '            });';
+    $html .= '          }';
+    $html .= '          detailHtml+=\'</tr>\';';
+    $html .= '        });';
+    $html .= '        detailHtml+=\'</tbody></table>\';';
+    $html .= '        if(a.details.items.length>8) detailHtml+=\'<div style="font-size:11px;color:#888;margin-top:4px;">他 \'+(a.details.items.length-8)+\'件</div>\';';
+    $html .= '        detailHtml+=\'</div>\';';
+    $html .= '      }';
+
+    // list形式（強制リフローなど）
+    $html .= '      else if(a.details&&a.details.type==="list"&&a.details.items&&a.details.items.length>0){';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;">\';';
+    $html .= '        a.details.items.slice(0,8).forEach(function(item){';
+    $html .= '          if(item.type==="table"&&item.items){';
+    $html .= '            var subHeadings=item.headings||[];';
+    $html .= '            detailHtml+=\'<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:8px;">\';';
+    $html .= '            if(subHeadings.length>0){';
+    $html .= '              detailHtml+=\'<thead><tr>\';';
+    $html .= '              subHeadings.forEach(function(h){ detailHtml+=\'<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;color:#555;font-weight:500;">\'+((h.label||h.key)||"")+\'</th>\'; });';
+    $html .= '              detailHtml+=\'</tr></thead>\';';
+    $html .= '            }';
+    $html .= '            detailHtml+=\'<tbody>\';';
+    $html .= '            item.items.slice(0,5).forEach(function(row){';
+    $html .= '              detailHtml+=\'<tr>\';';
+    $html .= '              subHeadings.forEach(function(h){';
+    $html .= '                var val=row[h.key]; var disp="";';
+    $html .= '                if(val===undefined||val===null) disp="-";';
+    $html .= '                else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,80))+\'</span>\';';
+    $html .= '                else if(typeof val==="object"&&(val.type==="timespanMs"||val.type==="ms")) disp=Math.round(val.value||0)+" ms";';
+    $html .= '                else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,80);';
+    $html .= '                else if(typeof val==="object") disp="-";';
+    $html .= '                else disp=String(val).substring(0,100);';
+    $html .= '                detailHtml+=\'<td style="padding:4px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
+    $html .= '              });';
+    $html .= '              detailHtml+=\'</tr>\';';
+    $html .= '            });';
+    $html .= '            detailHtml+=\'</tbody></table>\';';
+    $html .= '          } else if(typeof item==="string"){';
+    $html .= '            detailHtml+=\'<div style="padding:3px 0;color:#555;">\'+item+\'</div>\';';
+    $html .= '          } else if(item.value){';
+    $html .= '            detailHtml+=\'<div style="padding:3px 0;color:#555;">\'+String(item.value).substring(0,200)+\'</div>\';';
+    $html .= '          }';
+    $html .= '        });';
+    $html .= '        detailHtml+=\'</div>\';';
+    $html .= '      }';
+
+    // criticalrequestchains形式
+    $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;">クリティカルリクエストチェーンが検出されました。ネットワークの依存関係を確認してください。</div>\';';
+    $html .= '      }';
+
+    // 折りたたみUI
+    $html .= '      html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;margin-bottom:6px;">\';';
+    $html .= '      html+=\'<div onclick="spcToggleAudit(\\\''+detailId+'\\\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;">\';';
+    $html .= '      html+=\'<span style="color:\'+color+\';flex-shrink:0;font-size:13px;">\'+icon+\'</span>\';';
+    $html .= '      html+=\'<span style="flex:1;font-size:13px;font-weight:500;">\'+a.title+\'</span>\';';
+    $html .= '      html+=\'<span style="font-size:11px;color:#888;margin-right:4px;">スコア: \'+scoreDisp+\'</span>\';';
+    $html .= '      if(saving) html+=\'<span style="font-size:11px;color:#ba7517;margin-right:4px;">\'+saving+\'</span>\';';
+    $html .= '      html+=\'<span id="\'+detailId+\'_arrow" style="font-size:12px;color:#999;transition:transform .2s;">▶</span>\';';
+    $html .= '      html+=\'</div>\';';
+    $html .= '      html+=\'<div id="\'+detailId+\'" style="display:none;padding:0 14px 12px 14px;border-top:1px solid #f0f0f0;">\'+detailHtml+\'</div>\';';
     $html .= '      html+=\'</div>\';';
     $html .= '    });';
     $html .= '  }';
@@ -2328,10 +2427,24 @@ function spc_render_pagespeed_page() {
     $html .= '  setTimeout(function(){ btn.textContent="📋 コピー"; }, 2000);';
     $html .= '}';
 
+    $html .= 'function spcToggleAudit(id) {';
+    $html .= '  var el = document.getElementById(id);';
+    $html .= '  var arrow = document.getElementById(id+"_arrow");';
+    $html .= '  if (!el) return;';
+    $html .= '  var isOpen = el.style.display !== "none";';
+    $html .= '  el.style.display = isOpen ? "none" : "block";';
+    $html .= '  if (arrow) arrow.style.transform = isOpen ? "" : "rotate(90deg)";';
+    $html .= '}';
+
     $html .= 'document.addEventListener("keydown", function(e){';
     $html .= '  if (e.key==="Enter" && document.activeElement.id==="spc_ps_url") spcPsAnalyze();';
     $html .= '});';
     $html .= '</script>';
+
+    // 説明文
+    $html .= '<div style="background:#f0f6fc;border:1px solid #72aee6;border-radius:4px;padding:10px 16px;margin-top:16px;font-size:12px;color:#0073aa;line-height:1.7;">';
+    $html .= '⚠️ <strong>計測結果について：</strong>PageSpeed Insightsの計測結果はリクエストのたびに数値が変動する場合があります。改善対応後は最低5分以上待ってからキャッシュをクリアした上で計測してください。同じ条件で複数回計測し、平均値で判断することをお勧めします。1〜2点程度の差は誤差の範囲です。';
+    $html .= '</div>';
 
     $html .= '</div>';
     echo $html;
@@ -2375,4 +2488,112 @@ add_action('admin_notices', 'spc_update_check_notice');
 function spc_update_check_notice() {
     if (!isset($_GET['update_check']) || !current_user_can('manage_options')) return;
     echo '<div class="notice notice-success is-dismissible"><p>✅ Smile Performance のアップデート確認が完了しました。</p></div>';
+}
+
+// ============================================================
+// 更新履歴ページ
+// ============================================================
+function spc_render_changelog_page() {
+    if (!current_user_can('manage_options')) return;
+
+    $changelog = [
+        [
+            'version' => '1.12',
+            'date'    => '2026-04-02',
+            'changes' => [
+                'PageSpeed分析：改善が必要な項目を折りたたみ式に変更（クリックで展開/折りたたみ）',
+                'PageSpeed分析：強制リフロー・未使用JavaScript削減など詳細表示に対応（list・opportunity形式に対応）',
+                'PageSpeed分析：計測結果の変動に関する説明文を追加',
+                'LCPヒーロー画像preload：複数URL入力対応（1行に1URL、PC・モバイルで異なる画像に対応）',
+                '管理メニューに「更新履歴」ページを追加',
+            ],
+        ],
+        [
+            'version' => '1.11',
+            'date'    => '2026-04-01',
+            'changes' => [
+                'yakuhan CSSローカル化：フォントURLの相対パスを絶対URLに自動変換するよう修正（404エラー対応）',
+                'PageSpeed分析：URLデフォルト値をインストール済みサイトのURLに設定',
+                'PageSpeed分析：改善が必要な項目の詳細表示を改善（node・code・ms型に対応）',
+                'PageSpeed分析：APIカテゴリ取得方法を修正（ユーザー補助・おすすめの方法・SEOが取得できない問題を解消）',
+                'PageSpeed分析：APIキーを保存後マスク表示に変更（セキュリティ改善）',
+                'プラグイン一覧に「アップデートを確認」リンクを追加',
+                'GitHub Plugin URIをフォルダ構造に合わせて修正',
+            ],
+        ],
+        [
+            'version' => '1.1',
+            'date'    => '2026-04-01',
+            'changes' => [
+                'PageSpeed分析機能を追加（管理画面サブメニュー「📊 PageSpeed分析」）',
+                'PageSpeed Insights APIキー設定機能を追加',
+                'AI分析プロンプト生成・クリップボードコピー機能を追加',
+                'Cloudflare連携：プラグイン名・メニュー名を「Smile Cache」から「Smile Performance」に変更',
+            ],
+        ],
+        [
+            'version' => '1.0',
+            'date'    => '2026-03-31',
+            'changes' => [
+                'プラグイン化（functions.phpからスタンドアロンプラグインに移行）',
+                'GitHub連携・自動更新機能を追加（Git Updater対応）',
+                '管理メニュー名を「Smile Cache」から「Smile Performance」に変更',
+                'HTML圧縮機能を削除（LiteSpeedサーバーレベルの圧縮と重複するため）',
+                'spc_apply_tuning()の閉じ括弧欠落による構文エラーを修正',
+                'spc_get_db_stats()の全テーブルANALYZE実行によるタイムアウト問題を修正',
+                'ヒアドキュメント（<<<JS）を文字列連結に変換（サーバー互換性向上）',
+                '管理画面描画関数を完全にechoベースに統一（?>/?php混在を解消）',
+            ],
+        ],
+        [
+            'version' => '0.2',
+            'date'    => '2026-03-30',
+            'changes' => [
+                'Cloudflare API連携機能を追加（APIトークン・ゾーンID設定、接続テスト、投稿保存時自動パージ）',
+                'キャッシュ有効期限の設定UI化（管理画面から変更可能に）',
+                'プリロードCron間隔の設定UI化',
+                'プリフェッチ開始タイミング（遅延設定）を追加',
+                'LiteSpeed Cache 併用モード対応',
+            ],
+        ],
+        [
+            'version' => '0.1',
+            'date'    => '2026-03-30',
+            'changes' => [
+                '初回リリース',
+                'PHPファイルキャッシュ機能（standaloneモード）',
+                'Bricks最適化チューニング（DNSプリフェッチ・遅延読み込み・フォントpreload等）',
+                'GA4ローカル化・yakuhan CSSローカル化',
+                'フォームnonce自動リフレッシュ',
+                'リンクプリフェッチJS',
+                'データベース自動クリーン',
+            ],
+        ],
+    ];
+
+    echo '<div class="wrap">';
+    echo '<h1>📋 更新履歴</h1>';
+
+    foreach ($changelog as $release) {
+        $ver   = esc_html($release['version']);
+        $date  = esc_html($release['date']);
+        $is_current = ($release['version'] === '1.12');
+
+        echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
+        echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
+        echo '<span style="font-size:1.2em;font-weight:bold;">v' . $ver . '</span>';
+        if ($is_current) {
+            echo '<span style="background:#1d7a1d;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;">現在のバージョン</span>';
+        }
+        echo '<span style="font-size:.85em;color:#888;">' . $date . '</span>';
+        echo '</div>';
+        echo '<ul style="margin:0;padding-left:20px;">';
+        foreach ($release['changes'] as $change) {
+            echo '<li style="font-size:13px;color:#333;margin-bottom:4px;line-height:1.6;">' . esc_html($change) . '</li>';
+        }
+        echo '</ul>';
+        echo '</div>';
+    }
+
+    echo '</div>';
 }
