@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.14
+ * Version:     1.15
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -1305,6 +1305,14 @@ function spc_add_admin_menu() {
     );
     add_submenu_page(
         'spc-settings',
+        'WebP設定',
+        '🖼 WebP設定',
+        'manage_options',
+        'spc-webp',
+        'spc_render_webp_page'
+    );
+    add_submenu_page(
+        'spc-settings',
         '更新履歴',
         '📋 更新履歴',
         'manage_options',
@@ -2061,6 +2069,11 @@ function spc_render_pagespeed_page() {
     $nonce       = wp_create_nonce('spc_pagespeed_nonce');
     $save_nonce  = wp_nonce_field('spc_pagespeed_save_key', '_wpnonce', true, false);
 
+    // キャッシュモード取得（プロンプト前提条件用）
+    $spc_settings  = get_option('spc_settings', array());
+    $spc_cache_mode = $spc_settings['cache_mode'] ?? 'standalone';
+    $spc_is_litespeed = ($spc_cache_mode === 'litespeed');
+
     $html = '<div class="wrap">';
     $html .= '<h1>📊 PageSpeed分析</h1>';
 
@@ -2340,34 +2353,11 @@ function spc_render_pagespeed_page() {
 
     // criticalrequestchains形式（ネットワークの依存関係ツリー）
     $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
-    $html .= '        var chains=a.details.chains||{};';
-    $html .= '        var chainList=[];';
-    $html .= '        function spcFlattenChain(obj,depth){';
-    $html .= '          if(!obj||typeof obj!=="object") return;';
-    $html .= '          Object.keys(obj).forEach(function(k){';
-    $html .= '            var node=obj[k];';
-    $html .= '            if(node&&node.request){';
-    $html .= '              var req=node.request;';
-    $html .= '              var url=(req.url||"").split("/").slice(-2).join("/");';
-    $html .= '              var duration=req.endTime&&req.startTime?Math.round((req.endTime-req.startTime)*1000)+" ms":"-";';
-    $html .= '              var size=req.transferSize?Math.round(req.transferSize/1024)+" KiB":"-";';
-    $html .= '              var indent="　".repeat(depth);';
-    $html .= '              chainList.push(indent+(depth>0?"└ ":"")+url+" ("+duration+", "+size+")");';
-    $html .= '            }';
-    $html .= '            if(node&&node.children) spcFlattenChain(node.children,depth+1);';
-    $html .= '          });';
-    $html .= '        }';
-    $html .= '        spcFlattenChain(chains,0);';
-    $html .= '        if(chainList.length>0){';
-    $html .= '          detailHtml+=\'<div style="font-size:11px;font-family:monospace;line-height:1.8;">\';';
-    $html .= '          chainList.slice(0,10).forEach(function(line){';
-    $html .= '            detailHtml+=\'<div style="color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">\'+line+\'</div>\';';
-    $html .= '          });';
-    $html .= '          if(chainList.length>10) detailHtml+=\'<div style="color:#888;">他\'+(chainList.length-10)+\'件</div>\';';
-    $html .= '          detailHtml+=\'</div>\';';
-    $html .= '        } else {';
-    $html .= '          detailHtml+=\'<div style="font-size:12px;color:#555;">クリティカルリクエストチェーンが検出されました。</div>\';';
-    $html .= '        }';
+    $html .= '        var psUrl="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.7;">\'
+    $html .= '          +\'詳細はPage Speed Insightsのサイトへ直接アクセスし、結果を確認して下さい。<br>\'
+    $html .= '          +\'<a href="\'+psUrl+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;">\'+(psUrl)+\'</a>\'
+    $html .= '          +\'</div>\';';
     $html .= '      }';
 
     // 折りたたみUI
@@ -2431,14 +2421,24 @@ function spc_render_pagespeed_page() {
     $html .= '    textLines.push("");';
     $html .= '  });';
 
-    $html .= '  var prompt = "以下はPageSpeed Insightsの計測結果です。\n"';
-    $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\n"';
-    $html .= '    +"以下の点を踏まえて分析・提案してください。\n\n"';
-    $html .= '    +"1. スコアと主要指標の現状評価（良い点・問題点）\n"';
-    $html .= '    +"2. 改善が必要な項目の優先順位と具体的な対処方法\n"';
-    $html .= '    +"3. プラグインや設定で対応できる項目とBricks Builder側で対応すべき項目の分類\n"';
-    $html .= '    +"4. 対応難易度別（簡単・中程度・難しい）の改善ロードマップ\n\n"';
-    $html .= '    +textLines.join("\n");';
+    // プロンプト前提条件（PHPで動的生成）
+    $prompt_litespeed = $spc_is_litespeed
+        ? ' +"- LiteSpeed Cache併用モードを使用中。サーバーレベルでページキャッシュ・配信最適化が適用済みです。\\n"'
+        : '';
+
+    $html .= '  var prompt = "【前提条件】\\n"';
+    $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
+    $html .= '    +"- 画像最適化（遅延読み込み・LCPプリロード等）は設定済みです。\\n"';
+    $html .= '    +"- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n"';
+    $html .= $prompt_litespeed;
+    $html .= '    +"\\n以下はPageSpeed Insightsの計測結果です。\\n"';
+    $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\\n"';
+    $html .= '    +"以下の点を踏まえて分析・提案してください。\\n\\n"';
+    $html .= '    +"1. スコアと主要指標の現状評価（良い点・問題点）\\n"';
+    $html .= '    +"2. 改善が必要な項目の優先順位と具体的な対処方法\\n"';
+    $html .= '    +"3. プラグインや設定で対応できる項目とBricks Builder側で対応すべき項目の分類\\n"';
+    $html .= '    +"4. 対応難易度別（簡単・中程度・難しい）の改善ロードマップ\\n\\n"';
+    $html .= '    +textLines.join("\\n");';
 
     $html .= '  html+=\'<div style="margin-top:24px;background:#f0f6fc;border:1px solid #72aee6;border-radius:4px;padding:16px 20px;">\';';
     $html .= '  html+=\'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">\';';
@@ -2525,12 +2525,197 @@ function spc_update_check_notice() {
 }
 
 // ============================================================
+// WebP自動変換・リサイズ機能
+// ============================================================
+
+// WebP設定の登録
+add_action('admin_init', 'spc_webp_settings_init');
+function spc_webp_settings_init() {
+    register_setting('spc_webp_settings_group', 'spc_webp_enable');
+    register_setting('spc_webp_settings_group', 'spc_webp_quality', 'intval');
+    register_setting('spc_webp_settings_group', 'spc_webp_max_size', 'intval');
+    register_setting('spc_webp_settings_group', 'spc_webp_is_configured');
+    register_setting('spc_webp_settings_group', 'spc_webp_active_sizes', array('sanitize_callback' => 'spc_webp_sanitize_sizes'));
+}
+
+function spc_webp_sanitize_sizes($input) {
+    if (!is_array($input)) return array();
+    return array_filter($input, function($val) {
+        return $val !== 'dummy';
+    });
+}
+
+// 画像アップロード時の変換&リサイズ処理
+add_filter('wp_handle_upload', 'spc_webp_convert_on_upload', 10, 2);
+function spc_webp_convert_on_upload($upload, $context) {
+    if (get_option('spc_webp_enable', 'yes') !== 'yes' || isset($upload['error'])) {
+        return $upload;
+    }
+    $file_path = $upload['file'];
+    $type      = $upload['type'];
+    if (!in_array($type, array('image/jpeg', 'image/png'))) {
+        return $upload;
+    }
+    $editor = wp_get_image_editor($file_path);
+    if (is_wp_error($editor)) {
+        return $upload;
+    }
+    $max_size = (int) get_option('spc_webp_max_size', 2560);
+    $quality  = (int) get_option('spc_webp_quality', 75);
+    if ($max_size > 0) {
+        $size = $editor->get_size();
+        if (!is_wp_error($size)) {
+            if ($size['width'] > $max_size || $size['height'] > $max_size) {
+                $editor->resize($max_size, $max_size, false);
+            }
+        }
+    }
+    $editor->set_quality($quality);
+    $path_info     = pathinfo($file_path);
+    $dir           = $path_info['dirname'];
+    $filename      = $path_info['filename'];
+    $new_file_name = wp_unique_filename($dir, $filename . '.webp');
+    $new_file_path = $dir . '/' . $new_file_name;
+    $saved = $editor->save($new_file_path, 'image/webp');
+    if (!is_wp_error($saved)) {
+        @unlink($file_path);
+        $upload['file'] = $new_file_path;
+        $upload['url']  = str_replace(basename($upload['url']), $new_file_name, $upload['url']);
+        $upload['type'] = 'image/webp';
+    }
+    return $upload;
+}
+
+// サムネイル生成サイズの制御
+add_filter('intermediate_image_sizes_advanced', 'spc_webp_filter_image_sizes', 10, 3);
+function spc_webp_filter_image_sizes($new_sizes, $image_meta, $attachment_id) {
+    if (get_option('spc_webp_enable', 'yes') !== 'yes') {
+        return $new_sizes;
+    }
+    $is_configured = get_option('spc_webp_is_configured', 'no');
+    if ($is_configured === 'no') {
+        $active_sizes = array('thumbnail', 'large');
+    } else {
+        $active_sizes = get_option('spc_webp_active_sizes', array());
+        if (!is_array($active_sizes)) {
+            $active_sizes = array();
+        }
+    }
+    foreach (array_keys($new_sizes) as $size_name) {
+        if (!in_array($size_name, $active_sizes)) {
+            unset($new_sizes[$size_name]);
+        }
+    }
+    return $new_sizes;
+}
+
+// WebP設定ページ レンダー
+function spc_render_webp_page() {
+    if (!current_user_can('manage_options')) return;
+
+    $enable        = get_option('spc_webp_enable', 'yes');
+    $quality       = get_option('spc_webp_quality', 75);
+    $max_size      = get_option('spc_webp_max_size', 2560);
+    $is_configured = get_option('spc_webp_is_configured', 'no');
+    $all_sizes     = get_intermediate_image_sizes();
+    global $_wp_additional_image_sizes;
+
+    if ($is_configured === 'no') {
+        $active_sizes = array('thumbnail', 'large');
+    } else {
+        $active_sizes = get_option('spc_webp_active_sizes', array());
+        if (!is_array($active_sizes)) $active_sizes = array();
+    }
+
+    if (isset($_GET['settings-updated'])) {
+        echo '<div class="notice notice-success is-dismissible"><p>設定を保存しました。</p></div>';
+    }
+
+    echo '<div class="wrap">';
+    echo '<h1>&#x1F5BC; WebP自動変換・リサイズ設定</h1>';
+    echo '<p>画像アップロード時にJPEG・PNGを自動でWebPに変換・リサイズします。元画像は削除されます。</p>';
+    echo '<form action="options.php" method="post">';
+    echo '<input type="hidden" name="option_page" value="spc_webp_settings_group">';
+    echo '<input type="hidden" name="action" value="update">';
+    echo wp_nonce_field('spc_webp_settings_group-options', '_wpnonce', true, false);
+    echo '<input type="hidden" name="spc_webp_is_configured" value="yes">';
+    echo '<input type="hidden" name="spc_webp_active_sizes[]" value="dummy">';
+
+    echo '<table class="form-table">';
+
+    echo '<tr>';
+    echo '<th scope="row">自動変換機能</th>';
+    echo '<td>';
+    echo '<label>';
+    echo '<input type="checkbox" name="spc_webp_enable" value="yes"' . checked($enable, 'yes', false) . '>';
+    echo ' アップロード時に画像をWebPに自動変換する';
+    echo '</label>';
+    echo '</td>';
+    echo '</tr>';
+
+    echo '<tr>';
+    echo '<th scope="row"><label for="spc_webp_quality">変換品質 (Quality)</label></th>';
+    echo '<td>';
+    echo '<input type="number" id="spc_webp_quality" name="spc_webp_quality" value="' . esc_attr($quality) . '" min="1" max="100">';
+    echo '<p class="description">1〜100の範囲で指定。デフォルトは「75」です。</p>';
+    echo '</td>';
+    echo '</tr>';
+
+    echo '<tr>';
+    echo '<th scope="row"><label for="spc_webp_max_size">最大画像サイズ（長辺px）</label></th>';
+    echo '<td>';
+    echo '<input type="number" id="spc_webp_max_size" name="spc_webp_max_size" value="' . esc_attr($max_size) . '" min="0"> px';
+    echo '<p class="description">このサイズを超える画像はアスペクト比を維持して縮小されます。（デフォルト: 2560）</p>';
+    echo '</td>';
+    echo '</tr>';
+
+    echo '<tr>';
+    echo '<th scope="row">作成するサムネイル</th>';
+    echo '<td>';
+    echo '<p class="description">チェックを入れたサイズのサムネイルのみを生成します。<br>';
+    echo '<span style="color:#d63638;">※注意：テーマやプラグインが必須とする画像サイズは外さないようにしてください。</span></p>';
+    echo '<fieldset style="margin-top:10px;border:1px solid #ccd0d4;padding:15px;background:#fff;max-height:400px;overflow-y:auto;">';
+
+    foreach ($all_sizes as $size) {
+        $checked   = in_array($size, (array)$active_sizes) ? ' checked' : '';
+        $width     = isset($_wp_additional_image_sizes[$size]['width'])  ? $_wp_additional_image_sizes[$size]['width']  : get_option("{$size}_size_w");
+        $height    = isset($_wp_additional_image_sizes[$size]['height']) ? $_wp_additional_image_sizes[$size]['height'] : get_option("{$size}_size_h");
+        $crop      = isset($_wp_additional_image_sizes[$size]['crop'])   ? $_wp_additional_image_sizes[$size]['crop']   : get_option("{$size}_crop");
+        $crop_text = $crop ? '(切り抜きあり)' : '(比率維持)';
+        $w_disp    = $width  ?: '自動';
+        $h_disp    = $height ?: '自動';
+        echo '<label style="display:block;margin-bottom:8px;">';
+        echo '<input type="checkbox" name="spc_webp_active_sizes[]" value="' . esc_attr($size) . '"' . $checked . '>';
+        echo ' <strong>' . esc_html($size) . '</strong> [' . esc_html($w_disp) . ' &times; ' . esc_html($h_disp) . '] ' . esc_html($crop_text);
+        echo '</label>';
+    }
+
+    echo '</fieldset>';
+    echo '</td>';
+    echo '</tr>';
+
+    echo '</table>';
+    submit_button('設定を保存');
+    echo '</form>';
+    echo '</div>';
+}
+
+// ============================================================
 // 更新履歴ページ
 // ============================================================
 function spc_render_changelog_page() {
     if (!current_user_can('manage_options')) return;
 
     $changelog = [
+        [
+            'version' => '1.15',
+            'date'    => '2026-04-02',
+            'changes' => [
+                'WebP自動変換・リサイズ機能を追加（サブメニュー「WebP設定」）',
+                'PageSpeed分析：AIプロンプトにSmile Performance使用前提の説明を追加',
+                'PageSpeed分析：ネットワークの依存関係ツリーをPageSpeed InsightsへのリンクURL付き表示に変更',
+            ],
+        ],
         [
             'version' => '1.14',
             'date'    => '2026-04-02',
@@ -2627,7 +2812,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.14');
+        $is_current = ($release['version'] === '1.15');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
