@@ -2338,7 +2338,7 @@ function spc_render_pagespeed_page() {
 
     // 折りたたみUI
     $html .= '      html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;margin-bottom:6px;">\';';
-    $html .= '      html+=\'<div onclick="spcToggleAudit(\\\''+detailId+'\\\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;">\';';
+    $html .= '      html+=\'<div onclick="spcToggleAudit(\\\'\'+detailId+\'\\\')" style="display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;">\';';
     $html .= '      html+=\'<span style="color:\'+color+\';flex-shrink:0;font-size:13px;">\'+icon+\'</span>\';';
     $html .= '      html+=\'<span style="flex:1;font-size:13px;font-weight:500;">\'+a.title+\'</span>\';';
     $html .= '      html+=\'<span style="font-size:11px;color:#888;margin-right:4px;">スコア: \'+scoreDisp+\'</span>\';';
