@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.13
+ * Version:     1.14
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2314,8 +2314,15 @@ function spc_render_pagespeed_page() {
     $html .= '                if(val===undefined||val===null) disp="-";';
     $html .= '                else if(typeof val==="object"&&val.type==="url") disp=\'<span style="word-break:break-all;">\'+((val.url||"").substring(0,80))+\'</span>\';';
     $html .= '                else if(typeof val==="object"&&(val.type==="timespanMs"||val.type==="ms")) disp=Math.round(val.value||0)+" ms";';
+    // sourceキー対応（強制リフロー）
+    $html .= '                else if(h.key==="source"&&typeof val==="object"){';
+    $html .= '                  if(val.url&&val.line) disp=\'<span style="word-break:break-all;font-size:11px;">\'+val.url.split("/").pop()+":"+val.line+(val.column?":"+val.column:"")+\'</span>\';';
+    $html .= '                  else if(val.url) disp=\'<span style="word-break:break-all;">\'+val.url.split("/").pop()+\'</span>\';';
+    $html .= '                  else disp="[ソース不明]";';
+    $html .= '                }';
     $html .= '                else if(typeof val==="object"&&val.value!==undefined) disp=String(val.value).substring(0,80);';
     $html .= '                else if(typeof val==="object") disp="-";';
+    $html .= '                else if(typeof val==="number") disp=Math.round(val*100)/100+" ms";';
     $html .= '                else disp=String(val).substring(0,100);';
     $html .= '                detailHtml+=\'<td style="padding:4px 8px;border:1px solid #e0e0e0;color:#333;vertical-align:top;">\'+disp+\'</td>\';';
     $html .= '              });';
@@ -2331,9 +2338,36 @@ function spc_render_pagespeed_page() {
     $html .= '        detailHtml+=\'</div>\';';
     $html .= '      }';
 
-    // criticalrequestchains形式
+    // criticalrequestchains形式（ネットワークの依存関係ツリー）
     $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
-    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;">クリティカルリクエストチェーンが検出されました。ネットワークの依存関係を確認してください。</div>\';';
+    $html .= '        var chains=a.details.chains||{};';
+    $html .= '        var chainList=[];';
+    $html .= '        function spcFlattenChain(obj,depth){';
+    $html .= '          if(!obj||typeof obj!=="object") return;';
+    $html .= '          Object.keys(obj).forEach(function(k){';
+    $html .= '            var node=obj[k];';
+    $html .= '            if(node&&node.request){';
+    $html .= '              var req=node.request;';
+    $html .= '              var url=(req.url||"").split("/").slice(-2).join("/");';
+    $html .= '              var duration=req.endTime&&req.startTime?Math.round((req.endTime-req.startTime)*1000)+" ms":"-";';
+    $html .= '              var size=req.transferSize?Math.round(req.transferSize/1024)+" KiB":"-";';
+    $html .= '              var indent="　".repeat(depth);';
+    $html .= '              chainList.push(indent+(depth>0?"└ ":"")+url+" ("+duration+", "+size+")");';
+    $html .= '            }';
+    $html .= '            if(node&&node.children) spcFlattenChain(node.children,depth+1);';
+    $html .= '          });';
+    $html .= '        }';
+    $html .= '        spcFlattenChain(chains,0);';
+    $html .= '        if(chainList.length>0){';
+    $html .= '          detailHtml+=\'<div style="font-size:11px;font-family:monospace;line-height:1.8;">\';';
+    $html .= '          chainList.slice(0,10).forEach(function(line){';
+    $html .= '            detailHtml+=\'<div style="color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">\'+line+\'</div>\';';
+    $html .= '          });';
+    $html .= '          if(chainList.length>10) detailHtml+=\'<div style="color:#888;">他\'+(chainList.length-10)+\'件</div>\';';
+    $html .= '          detailHtml+=\'</div>\';';
+    $html .= '        } else {';
+    $html .= '          detailHtml+=\'<div style="font-size:12px;color:#555;">クリティカルリクエストチェーンが検出されました。</div>\';';
+    $html .= '        }';
     $html .= '      }';
 
     // 折りたたみUI
@@ -2498,6 +2532,22 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.14',
+            'date'    => '2026-04-02',
+            'changes' => [
+                'PageSpeed分析：強制リフローのスクリプト名・行番号・時間を正しく表示するよう修正',
+                'PageSpeed分析：ネットワークの依存関係ツリーを[object Object]からURL・時間・サイズ付きのツリー表示に改善',
+            ],
+        ],
+        [
+            'version' => '1.13',
+            'date'    => '2026-04-02',
+            'changes' => [
+                'GitHub Plugin URIをルート直下の構造に合わせて修正（自動更新通知の改善）',
+                'リポジトリをPublicに変更',
+            ],
+        ],
+        [
             'version' => '1.12',
             'date'    => '2026-04-02',
             'changes' => [
@@ -2577,7 +2627,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.12');
+        $is_current = ($release['version'] === '1.14');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
