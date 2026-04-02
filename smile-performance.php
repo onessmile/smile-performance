@@ -2354,10 +2354,7 @@ function spc_render_pagespeed_page() {
     // criticalrequestchains形式（ネットワークの依存関係ツリー）
     $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
     $html .= '        var psUrl="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
-    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.7;">\'
-    $html .= '          +\'詳細はPage Speed Insightsのサイトへ直接アクセスし、結果を確認して下さい。<br>\'
-    $html .= '          +\'<a href="\'+psUrl+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;">\'+(psUrl)+\'</a>\'
-    $html .= '          +\'</div>\';';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.7;">詳細はPage Speed Insightsのサイトへ直接アクセスし、結果を確認して下さい。<br><a href="\'+psUrl+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;">\'+psUrl+\'</a></div>\';';
     $html .= '      }';
 
     // 折りたたみUI
