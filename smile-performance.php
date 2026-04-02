@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.12
+ * Version:     1.13
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
