@@ -3,10 +3,11 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.15
+ * Version:     1.16
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
+ * Tested up to:     6.9.4
  * GitHub Plugin URI: onessmile/smile-performance
  * GitHub Branch:     main
  * Auto Update URI:   https://github.com/onessmile/smile-performance
@@ -796,6 +797,10 @@ function spc_apply_tuning() {
     // LCPヒーロー画像のpreload（URL直接入力方式）
     if (!empty($s['tuning_lcp_preload']) && !empty($s['tuning_lcp_preload_url'])) {
         add_action('wp_head', 'spc_output_lcp_preload', 1);
+        // fetchpriority="high" / loading="eager" を対象imgタグに自動付与
+        add_filter('bricks_front_render', 'spc_add_lcp_img_attrs', 99);
+        add_filter('the_content',         'spc_add_lcp_img_attrs', 99);
+        add_action('wp_head',             'spc_add_lcp_img_attrs_buffer', 0);
     }
 
     // フォントpreload
@@ -852,6 +857,46 @@ function spc_output_lcp_preload() {
             echo '<link rel="preload" as="image" href="' . esc_url($url) . '" fetchpriority="high">' . "\n";
         }
     }
+}
+
+// LCP対象imgタグに fetchpriority="high" / loading="eager" を付与（the_content / bricks_front_render用）
+function spc_add_lcp_img_attrs($content) {
+    if (is_admin() || empty($content)) return $content;
+    $s        = spc_get_settings();
+    $urls_raw = $s['tuning_lcp_preload_url'] ?? '';
+    $url_list = array_filter(array_map('trim', explode("\n", $urls_raw)));
+    if (empty($url_list)) return $content;
+
+    foreach ($url_list as $lcp_url) {
+        $lcp_url = esc_url($lcp_url);
+        // src属性にURLが含まれるimgタグを対象に属性付与
+        $content = preg_replace_callback(
+            '/<img([^>]*?)>/i',
+            function($matches) use ($lcp_url) {
+                $attrs = $matches[1];
+                if (strpos($attrs, $lcp_url) === false) return $matches[0];
+                // fetchpriority が未設定なら追加
+                if (stripos($attrs, 'fetchpriority') === false) {
+                    $attrs .= ' fetchpriority="high"';
+                }
+                // loading が未設定またはlazyなら eager に変更
+                if (stripos($attrs, 'loading') === false) {
+                    $attrs .= ' loading="eager"';
+                } else {
+                    $attrs = preg_replace('/loading=(["\'])lazy\1/i', 'loading="eager"', $attrs);
+                }
+                return '<img' . $attrs . '>';
+            },
+            $content
+        );
+    }
+    return $content;
+}
+
+// 出力バッファリングでBricksのヒーロー画像にも対応（wp_headの前にバッファ開始）
+function spc_add_lcp_img_attrs_buffer() {
+    if (is_admin()) return;
+    ob_start('spc_add_lcp_img_attrs');
 }
 
 // フォントpreload出力（Bricksローカルフォントのwoff2をpreload）
@@ -1297,19 +1342,19 @@ function spc_add_admin_menu() {
     );
     add_submenu_page(
         'spc-settings',
-        'Cloudflare API連携',
-        '☁ Cloudflare連携',
-        'manage_options',
-        'spc-cloudflare',
-        'spc_render_cf_page'
-    );
-    add_submenu_page(
-        'spc-settings',
         'WebP設定',
         '🖼 WebP設定',
         'manage_options',
         'spc-webp',
         'spc_render_webp_page'
+    );
+    add_submenu_page(
+        'spc-settings',
+        'Cloudflare API連携',
+        '☁ Cloudflare連携',
+        'manage_options',
+        'spc-cloudflare',
+        'spc_render_cf_page'
     );
     add_submenu_page(
         'spc-settings',
@@ -2419,15 +2464,41 @@ function spc_render_pagespeed_page() {
     $html .= '  });';
 
     // プロンプト前提条件（PHPで動的生成）
-    $prompt_litespeed = $spc_is_litespeed
-        ? ' +"- LiteSpeed Cache併用モードを使用中。サーバーレベルでページキャッシュ・配信最適化が適用済みです。\\n"'
-        : '';
+    // PageSpeedスコアに影響する有効化済み設定を収集
+    $spc_active_features = [];
+    if ($spc_is_litespeed)                                   $spc_active_features[] = 'LiteSpeed Cache併用モード（サーバーレベルのページキャッシュ・配信最適化）';
+    if (!empty($spc_settings['prefetch_enabled']))           $spc_active_features[] = 'リンクプリフェッチ（ホバー前のページ先読み）';
+    if (!empty($spc_settings['tuning_lcp_preload']) && !empty($spc_settings['tuning_lcp_preload_url']))
+                                                             $spc_active_features[] = 'LCPヒーロー画像preload・fetchpriority=high・loading=eager';
+    if (!empty($spc_settings['tuning_js_defer']))            $spc_active_features[] = 'scroll-timeline.js defer（レンダリングブロック解消）';
+    if (!empty($spc_settings['tuning_iframe_lazy']))         $spc_active_features[] = 'iFrame遅延読み込み';
+    if (!empty($spc_settings['tuning_image_blur_lazy']))     $spc_active_features[] = '画像ブラーフェードイン（遅延読み込み）';
+    if (!empty($spc_settings['tuning_image_lazy_enhance']))  $spc_active_features[] = '画像loading=lazy強化';
+    if (!empty($spc_settings['tuning_font_preload']))        $spc_active_features[] = 'フォントpreload';
+    if (!empty($spc_settings['tuning_dns_prefetch_fonts']))  $spc_active_features[] = 'Google Fonts DNS prefetch';
+    if (!empty($spc_settings['tuning_dns_prefetch']) && empty($spc_settings['ga4_local_enabled']))
+                                                             $spc_active_features[] = 'GTM/GA DNS preconnect';
+    if (!empty($spc_settings['ga4_local_enabled']))          $spc_active_features[] = 'GA4スクリプトローカル配信';
+    if (!empty($spc_settings['yakuhan_jp_enabled']) || !empty($spc_settings['yakuhan_mp_enabled']))
+                                                             $spc_active_features[] = 'Yakuhan CSSローカル配信';
+    if (!empty($spc_settings['tuning_query_strings']))       $spc_active_features[] = 'クエリストリング除去（キャッシュ効率化）';
+    if (!empty($spc_settings['tuning_browser_cache']) && !$spc_is_litespeed)
+                                                             $spc_active_features[] = 'ブラウザキャッシュ設定';
+    if (!empty($spc_settings['tuning_video_lazy']))          $spc_active_features[] = '動画遅延読み込み';
+    if (get_option('spc_webp_enable', 'yes') === 'yes')      $spc_active_features[] = 'WebP自動変換';
+
+    $prompt_features = '';
+    if (!empty($spc_active_features)) {
+        $prompt_features  = ' +"\\n【Smile Performance 有効化済み設定】\\n"';
+        foreach ($spc_active_features as $feat) {
+            $prompt_features .= ' +"- ' . $feat . '\\n"';
+        }
+    }
 
     $html .= '  var prompt = "【前提条件】\\n"';
     $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
-    $html .= '    +"- 画像最適化（遅延読み込み・LCPプリロード等）は設定済みです。\\n"';
     $html .= '    +"- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n"';
-    $html .= $prompt_litespeed;
+    $html .= $prompt_features;
     $html .= '    +"\\n以下はPageSpeed Insightsの計測結果です。\\n"';
     $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\\n"';
     $html .= '    +"以下の点を踏まえて分析・提案してください。\\n\\n"';
@@ -2525,6 +2596,12 @@ function spc_update_check_notice() {
 // WebP自動変換・リサイズ機能
 // ============================================================
 
+// psi-fit-pcサイズをWordPressに登録
+add_action('after_setup_theme', 'spc_register_psi_image_size');
+function spc_register_psi_image_size() {
+    add_image_size('psi-fit-pc', 1366, 9999, false);
+}
+
 // WebP設定の登録
 add_action('admin_init', 'spc_webp_settings_init');
 function spc_webp_settings_init() {
@@ -2533,6 +2610,8 @@ function spc_webp_settings_init() {
     register_setting('spc_webp_settings_group', 'spc_webp_max_size', 'intval');
     register_setting('spc_webp_settings_group', 'spc_webp_is_configured');
     register_setting('spc_webp_settings_group', 'spc_webp_active_sizes', array('sanitize_callback' => 'spc_webp_sanitize_sizes'));
+    register_setting('spc_webp_settings_group', 'spc_webp_psi_enabled');
+    register_setting('spc_webp_settings_group', 'spc_webp_psi_urls');
 }
 
 function spc_webp_sanitize_sizes($input) {
@@ -2604,6 +2683,182 @@ function spc_webp_filter_image_sizes($new_sizes, $image_meta, $attachment_id) {
         }
     }
     return $new_sizes;
+}
+
+// PSI最適化：指定URL画像のsrcsetにpsi-fit-pcを自動追加
+add_filter('wp_get_attachment_image_attributes', 'spc_psi_srcset_inject', 20, 3);
+function spc_psi_srcset_inject($attr, $attachment, $size) {
+    if (is_admin()) return $attr;
+    if (get_option('spc_webp_psi_enabled') !== 'yes') return $attr;
+
+    $psi_urls_raw = get_option('spc_webp_psi_urls', '');
+    $psi_urls = array_filter(array_map('trim', explode("
+", $psi_urls_raw)));
+    if (empty($psi_urls)) return $attr;
+
+    $src = $attr['src'] ?? '';
+    $matched = false;
+    foreach ($psi_urls as $psi_url) {
+        if (!empty($psi_url) && strpos($src, basename($psi_url)) !== false) {
+            $matched = true;
+            break;
+        }
+    }
+    if (!$matched) return $attr;
+
+    $psi_src = wp_get_attachment_image_src($attachment->ID, 'psi-fit-pc');
+    if (!$psi_src) return $attr;
+
+    $full_src = wp_get_attachment_image_src($attachment->ID, 'full');
+    $psi_w = $psi_src[1];
+    $full_w = $full_src ? $full_src[1] : 1920;
+
+    $existing_srcset = $attr['srcset'] ?? '';
+    $psi_entry = esc_url($psi_src[0]) . ' ' . $psi_w . 'w';
+
+    if (strpos($existing_srcset, $psi_src[0]) === false) {
+        $attr['srcset'] = $psi_entry . ($existing_srcset ? ', ' . $existing_srcset : '');
+    }
+
+    $existing_sizes = $attr['sizes'] ?? '';
+    if (strpos($existing_sizes, '1366px') === false) {
+        $attr['sizes'] = '(max-width: 1366px) 1366px' . ($existing_sizes ? ', ' . $existing_sizes : ', 100vw');
+    }
+
+    return $attr;
+}
+
+// 出力バッファリングでBricksのimgタグにも対応
+add_action('template_redirect', 'spc_psi_buffer_start', 1);
+function spc_psi_buffer_start() {
+    if (is_admin()) return;
+    if (get_option('spc_webp_psi_enabled') !== 'yes') return;
+    ob_start('spc_psi_inject_buffer');
+}
+
+function spc_psi_inject_buffer($html) {
+    $psi_urls_raw = get_option('spc_webp_psi_urls', '');
+    $psi_urls = array_filter(array_map('trim', explode("
+", $psi_urls_raw)));
+    if (empty($psi_urls)) return $html;
+
+    foreach ($psi_urls as $psi_url) {
+        $psi_url = trim($psi_url);
+        if (empty($psi_url)) continue;
+        $basename = preg_quote(basename($psi_url), '/');
+
+        $html = preg_replace_callback(
+            '/<img([^>]*?)>/i',
+            function($matches) use ($basename) {
+                $attrs = $matches[1];
+                if (!preg_match('/' . $basename . '/i', $attrs)) return $matches[0];
+                // すでにpsi-fit-pcのsrcsetが入っている場合はスキップ
+                if (strpos($attrs, '1366w') !== false) return $matches[0];
+
+                // 対象画像のアタッチメントIDを取得してpsi-fit-pcのURLを差し込む
+                if (preg_match('#src=(["\'])([^"\']+)\\1#', $attrs, $src_m)) {
+                    $attachment_id = attachment_url_to_postid($src_m[2]);
+                    if ($attachment_id) {
+                        $psi_img = wp_get_attachment_image_src($attachment_id, 'psi-fit-pc');
+                        if ($psi_img) {
+                            $psi_entry = esc_url($psi_img[0]) . ' ' . $psi_img[1] . 'w';
+                            if (preg_match('#srcset=(["\'])([^"\']*)\\1#', $attrs, $ss_m)) {
+                                $new_srcset = $psi_entry . ', ' . $ss_m[2];
+                                $attrs = str_replace($ss_m[0], 'srcset="' . $new_srcset . '"', $attrs);
+                            } else {
+                                $attrs .= ' srcset="' . $psi_entry . '"';
+                            }
+                            if (strpos($attrs, 'sizes=') === false) {
+                                $attrs .= ' sizes="(max-width: 1366px) 1366px, 100vw"';
+                            }
+                        }
+                    }
+                }
+                return '<img' . $attrs . '>';
+            },
+            $html
+        );
+    }
+    return $html;
+}
+
+// AJAX: 既存WebP画像への一括PSI-fit-pc生成
+add_action('wp_ajax_spc_generate_psi_bulk', 'spc_generate_psi_bulk');
+function spc_generate_psi_bulk() {
+    check_ajax_referer('spc_psi_bulk_nonce', 'nonce');
+    if (!current_user_can('manage_options')) wp_die('Unauthorized');
+
+    $offset = (int)($_POST['offset'] ?? 0);
+    $batch  = 5;
+
+    $query = new WP_Query(array(
+        'post_type'      => 'attachment',
+        'post_mime_type' => 'image/webp',
+        'post_status'    => 'inherit',
+        'posts_per_page' => $batch,
+        'offset'         => $offset,
+        'fields'         => 'ids',
+    ));
+
+    $total = (new WP_Query(array(
+        'post_type'      => 'attachment',
+        'post_mime_type' => 'image/webp',
+        'post_status'    => 'inherit',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+    )))->found_posts;
+
+    $generated = 0;
+    $skipped   = 0;
+    $errors    = 0;
+
+    foreach ($query->posts as $id) {
+        $file = get_attached_file($id);
+        if (!$file || !file_exists($file)) { $errors++; continue; }
+
+        // 元画像が1366px未満はスキップ
+        $meta = wp_get_attachment_metadata($id);
+        $orig_w = $meta['width'] ?? 0;
+        if ($orig_w < 1366) { $skipped++; continue; }
+
+        // psi-fit-pcが既に存在するかチェック
+        if (!empty($meta['sizes']['psi-fit-pc'])) { $skipped++; continue; }
+
+        // サムネイル生成
+        $editor = wp_get_image_editor($file);
+        if (is_wp_error($editor)) { $errors++; continue; }
+
+        $editor->resize(1366, 9999, false);
+        $editor->set_quality((int)get_option('spc_webp_quality', 75));
+
+        $path_info = pathinfo($file);
+        $new_name  = $path_info['filename'] . '-1366x' . $editor->get_size()['height'] . '.webp';
+        $new_path  = $path_info['dirname'] . '/' . $new_name;
+        $saved     = $editor->save($new_path, 'image/webp');
+
+        if (is_wp_error($saved)) { $errors++; continue; }
+
+        // メタデータに追記
+        $meta['sizes']['psi-fit-pc'] = array(
+            'file'      => basename($saved['path']),
+            'width'     => $saved['width'],
+            'height'    => $saved['height'],
+            'mime-type' => 'image/webp',
+        );
+        wp_update_attachment_metadata($id, $meta);
+        $generated++;
+    }
+
+    $done = ($offset + $batch) >= $total;
+
+    wp_send_json_success(array(
+        'generated' => $generated,
+        'skipped'   => $skipped,
+        'errors'    => $errors,
+        'offset'    => $offset + $batch,
+        'total'     => $total,
+        'done'      => $done,
+    ));
 }
 
 // WebP設定ページ レンダー
@@ -2691,9 +2946,84 @@ function spc_render_webp_page() {
     echo '</td>';
     echo '</tr>';
 
+    // PSI最適化設定
+    $psi_enabled  = get_option('spc_webp_psi_enabled', 'no');
+    $psi_urls_val = get_option('spc_webp_psi_urls', '');
+    $psi_nonce    = wp_create_nonce('spc_psi_bulk_nonce');
+
+    echo '<tr>';
+    echo '<th scope="row">PSI最適化（PC）</th>';
+    echo '<td>';
+    echo '<label>';
+    echo '<input type="checkbox" name="spc_webp_psi_enabled" value="yes"' . checked($psi_enabled, 'yes', false) . '>';
+    echo ' 指定画像にpsi-fit-pc（1366px）をsrcsetで自動配信する';
+    echo '</label>';
+    echo '<p class="description">チェックした場合、下記で指定したLCPヒーロー画像に対してmax-width: 1366px環境でpsi-fit-pcサイズを優先配信します。</p>';
+    echo '</td>';
+    echo '</tr>';
+
+    echo '<tr id="spc_psi_url_row"' . ($psi_enabled !== 'yes' ? ' style="display:none;"' : '') . '>';
+    echo '<th scope="row"><label for="spc_webp_psi_urls">対象画像URL</label></th>';
+    echo '<td>';
+    echo '<textarea id="spc_webp_psi_urls" name="spc_webp_psi_urls" rows="4" style="width:100%;max-width:560px;font-family:monospace;font-size:12px;" placeholder="https://example.com/wp-content/uploads/hero.webp">' . esc_textarea($psi_urls_val) . '</textarea>';
+    echo '<p class="description">1行に1URL。LCPプリロードに設定した画像URLと同じURLを入力してください。</p>';
+    echo '</td>';
+    echo '</tr>';
+
     echo '</table>';
     submit_button('設定を保存');
     echo '</form>';
+
+    // 一括PSI-fit-pc生成
+    echo '<hr style="margin:30px 0;">';
+    echo '<h2>既存WebP画像へのPSI-fit-pc一括生成</h2>';
+    echo '<p>メディアライブラリ内のWebP画像に対してpsi-fit-pc（1366px）サムネイルを一括生成します。<br>';
+    echo '元画像が1366px未満のもの・すでに生成済みのものはスキップされます。</p>';
+    echo '<button type="button" id="spc_psi_bulk_btn" class="button button-secondary">🔄 一括生成を開始</button>';
+    echo '<div id="spc_psi_bulk_progress" style="margin-top:12px;display:none;">';
+    echo '<div id="spc_psi_bulk_bar_wrap" style="background:#e0e0e0;border-radius:4px;height:18px;width:400px;max-width:100%;overflow:hidden;">';
+    echo '<div id="spc_psi_bulk_bar" style="background:#0073aa;height:18px;width:0%;transition:width 0.3s;"></div>';
+    echo '</div>';
+    echo '<p id="spc_psi_bulk_status" style="margin-top:6px;font-size:13px;"></p>';
+    echo '</div>';
+
+    echo '<script>';
+    echo 'document.querySelector("[name=spc_webp_psi_enabled]").addEventListener("change", function() {';
+    echo '  document.getElementById("spc_psi_url_row").style.display = this.checked ? "" : "none";';
+    echo '});';
+    echo 'document.getElementById("spc_psi_bulk_btn").addEventListener("click", function() {';
+    echo '  var btn = this;';
+    echo '  btn.disabled = true;';
+    echo '  document.getElementById("spc_psi_bulk_progress").style.display = "";';
+    echo '  var totalProcessed = 0, totalCount = 0, totalGen = 0, totalSkip = 0, totalErr = 0;';
+    echo '  function runBatch(offset) {';
+    echo '    var fd = new FormData();';
+    echo '    fd.append("action", "spc_generate_psi_bulk");';
+    echo '    fd.append("nonce", "' . $psi_nonce . '");';
+    echo '    fd.append("offset", offset);';
+    echo '    fetch(ajaxurl, {method:"POST", body:fd})';
+    echo '      .then(function(r){ return r.json(); })';
+    echo '      .then(function(res) {';
+    echo '        if (!res.success) { document.getElementById("spc_psi_bulk_status").textContent = "エラーが発生しました。"; btn.disabled = false; return; }';
+    echo '        var d = res.data;';
+    echo '        totalCount = d.total;';
+    echo '        totalGen  += d.generated;';
+    echo '        totalSkip += d.skipped;';
+    echo '        totalErr  += d.errors;';
+    echo '        totalProcessed = Math.min(d.offset, totalCount);';
+    echo '        var pct = totalCount > 0 ? Math.round(totalProcessed / totalCount * 100) : 100;';
+    echo '        document.getElementById("spc_psi_bulk_bar").style.width = pct + "%";';
+    echo '        document.getElementById("spc_psi_bulk_status").textContent = totalProcessed + " / " + totalCount + " 件処理中（生成: " + totalGen + " / スキップ: " + totalSkip + " / エラー: " + totalErr + "）";';
+    echo '        if (!d.done) { runBatch(d.offset); } else {';
+    echo '          document.getElementById("spc_psi_bulk_status").textContent = "完了！ 全" + totalCount + "件 ／ 生成: " + totalGen + " / スキップ: " + totalSkip + " / エラー: " + totalErr;';
+    echo '          btn.disabled = false;';
+    echo '        }';
+    echo '      });';
+    echo '  }';
+    echo '  runBatch(0);';
+    echo '});';
+    echo '</script>';
+
     echo '</div>';
 }
 
@@ -2704,6 +3034,22 @@ function spc_render_changelog_page() {
     if (!current_user_can('manage_options')) return;
 
     $changelog = [
+        [
+            'version' => '1.16',
+            'date'    => '2026-04-03',
+            'changes' => [
+                'プラグインアイコンを追加',
+                'WordPress 6.9.4との互換性確認（Tested up to: 6.9.4）',
+                'サブメニュー順序変更：WebP設定をCloudflare連携の前に移動',
+                'PageSpeed分析：ネットワークの依存関係ツリーをPageSpeed InsightsへのURLリンク表示に修正',
+                'PageSpeed分析：AIプロンプトから「画像最適化は設定済み」の行を削除',
+                'PageSpeed分析：AIプロンプトにSmile Performance有効化済み設定を動的に表示',
+                'LCPヒーロー画像：指定URL画像のimgタグにfetchpriority="high"とloading="eager"を自動付与',
+                'WebP設定：psi-fit-pc（1366px）サムネイルサイズを追加',
+                'WebP設定：PSI最適化（PC）機能を追加 — 指定URL画像にmax-width: 1366pxでpsi-fit-pcをsrcset自動配信',
+                'WebP設定：既存WebP画像へのpsi-fit-pc一括生成ボタンを追加',
+            ],
+        ],
         [
             'version' => '1.15',
             'date'    => '2026-04-02',
@@ -2809,7 +3155,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.15');
+        $is_current = ($release['version'] === '1.16');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
