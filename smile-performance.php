@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.16
+ * Version:     1.17
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -1776,7 +1776,7 @@ function spc_render_settings_page() {
     $lcp_chk = $lcp_preload_enabled ? ' checked' : '';
     $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;margin-top:6px;">';
     $html .= '<input type="checkbox" id="spc_lcp_preload_toggle" name="spc_settings[tuning_lcp_preload]" value="1"' . $lcp_chk . ' onchange="spcToggleLcpUrl(this)" style="margin-top:2px;">';
-    $html .= '<span><strong>LCPヒーロー画像preload</strong><br><span style="font-size:.85em;color:#666;">ヒーロー画像のURLを指定してpreloadします。PC・モバイルで異なる画像の場合は両方のURLを入力してください。</span></span></label>';
+    $html .= '<span><strong>LCPヒーロー画像</strong><br><span style="font-size:.85em;color:#666;">ヒーロー画像のURLを指定してpreload、fetchpriority=&quot;high&quot;、loading=&quot;eager&quot;を自動付与します。PC・モバイルで異なる画像の場合は両方のURLを入力してください。</span></span></label>';
     $html .= '<div id="spc_lcp_url_wrap" style="' . $lcp_vis . 'padding-left:24px;margin-bottom:10px;">';
     $html .= '<textarea name="spc_settings[tuning_lcp_preload_url]" rows="3" style="width:100%;max-width:560px;font-family:monospace;font-size:12px;" placeholder="https://example.com/wp-content/uploads/hero-pc.webp&#10;https://example.com/wp-content/uploads/hero-sp.webp">' . esc_textarea($lcp_preload_url) . '</textarea>';
     $html .= '<p class="description">1行に1URLで複数入力可能です。メディアライブラリから画像URLをコピーして貼り付けてください。</p></div>';
@@ -2818,8 +2818,10 @@ function spc_generate_psi_bulk() {
 
         // 元画像が1366px未満はスキップ
         $meta = wp_get_attachment_metadata($id);
-        $orig_w = $meta['width'] ?? 0;
-        if ($orig_w < 1366) { $skipped++; continue; }
+        $orig_w = $meta['width']  ?? 0;
+        $orig_h = $meta['height'] ?? 0;
+        $orig_long = max($orig_w, $orig_h);
+        if ($orig_long < 1366) { $skipped++; continue; }
 
         // psi-fit-pcが既に存在するかチェック
         if (!empty($meta['sizes']['psi-fit-pc'])) { $skipped++; continue; }
@@ -3035,6 +3037,14 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.17',
+            'date'    => '2026-04-04',
+            'changes' => [
+                'LCPヒーロー画像の説明文を更新（preload・fetchpriority・loading=eagerの付与を明記）',
+                'WebP設定：PSI一括生成で縦長画像（高さ＞幅）の場合も長辺基準で1366px判定に変更',
+            ],
+        ],
+        [
             'version' => '1.16',
             'date'    => '2026-04-03',
             'changes' => [
@@ -3155,7 +3165,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.16');
+        $is_current = ($release['version'] === '1.17');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
