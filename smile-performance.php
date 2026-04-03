@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.17
+ * Version:     1.18
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2599,7 +2599,7 @@ function spc_update_check_notice() {
 // psi-fit-pcサイズをWordPressに登録
 add_action('after_setup_theme', 'spc_register_psi_image_size');
 function spc_register_psi_image_size() {
-    add_image_size('psi-fit-pc', 1366, 9999, false);
+    add_image_size('psi-fit-pc', 1080, 9999, false);
 }
 
 // WebP設定の登録
@@ -2610,8 +2610,6 @@ function spc_webp_settings_init() {
     register_setting('spc_webp_settings_group', 'spc_webp_max_size', 'intval');
     register_setting('spc_webp_settings_group', 'spc_webp_is_configured');
     register_setting('spc_webp_settings_group', 'spc_webp_active_sizes', array('sanitize_callback' => 'spc_webp_sanitize_sizes'));
-    register_setting('spc_webp_settings_group', 'spc_webp_psi_enabled');
-    register_setting('spc_webp_settings_group', 'spc_webp_psi_urls');
 }
 
 function spc_webp_sanitize_sizes($input) {
@@ -2670,7 +2668,7 @@ function spc_webp_filter_image_sizes($new_sizes, $image_meta, $attachment_id) {
     }
     $is_configured = get_option('spc_webp_is_configured', 'no');
     if ($is_configured === 'no') {
-        $active_sizes = array('thumbnail', 'large');
+        $active_sizes = array('thumbnail', 'medium_large', 'large', 'psi-fit-pc');
     } else {
         $active_sizes = get_option('spc_webp_active_sizes', array());
         if (!is_array($active_sizes)) {
@@ -2683,103 +2681,6 @@ function spc_webp_filter_image_sizes($new_sizes, $image_meta, $attachment_id) {
         }
     }
     return $new_sizes;
-}
-
-// PSI最適化：指定URL画像のsrcsetにpsi-fit-pcを自動追加
-add_filter('wp_get_attachment_image_attributes', 'spc_psi_srcset_inject', 20, 3);
-function spc_psi_srcset_inject($attr, $attachment, $size) {
-    if (is_admin()) return $attr;
-    if (get_option('spc_webp_psi_enabled') !== 'yes') return $attr;
-
-    $psi_urls_raw = get_option('spc_webp_psi_urls', '');
-    $psi_urls = array_filter(array_map('trim', explode("
-", $psi_urls_raw)));
-    if (empty($psi_urls)) return $attr;
-
-    $src = $attr['src'] ?? '';
-    $matched = false;
-    foreach ($psi_urls as $psi_url) {
-        if (!empty($psi_url) && strpos($src, basename($psi_url)) !== false) {
-            $matched = true;
-            break;
-        }
-    }
-    if (!$matched) return $attr;
-
-    $psi_src = wp_get_attachment_image_src($attachment->ID, 'psi-fit-pc');
-    if (!$psi_src) return $attr;
-
-    $full_src = wp_get_attachment_image_src($attachment->ID, 'full');
-    $psi_w = $psi_src[1];
-    $full_w = $full_src ? $full_src[1] : 1920;
-
-    $existing_srcset = $attr['srcset'] ?? '';
-    $psi_entry = esc_url($psi_src[0]) . ' ' . $psi_w . 'w';
-
-    if (strpos($existing_srcset, $psi_src[0]) === false) {
-        $attr['srcset'] = $psi_entry . ($existing_srcset ? ', ' . $existing_srcset : '');
-    }
-
-    $existing_sizes = $attr['sizes'] ?? '';
-    if (strpos($existing_sizes, '1366px') === false) {
-        $attr['sizes'] = '(max-width: 1366px) 1366px' . ($existing_sizes ? ', ' . $existing_sizes : ', 100vw');
-    }
-
-    return $attr;
-}
-
-// 出力バッファリングでBricksのimgタグにも対応
-add_action('template_redirect', 'spc_psi_buffer_start', 1);
-function spc_psi_buffer_start() {
-    if (is_admin()) return;
-    if (get_option('spc_webp_psi_enabled') !== 'yes') return;
-    ob_start('spc_psi_inject_buffer');
-}
-
-function spc_psi_inject_buffer($html) {
-    $psi_urls_raw = get_option('spc_webp_psi_urls', '');
-    $psi_urls = array_filter(array_map('trim', explode("
-", $psi_urls_raw)));
-    if (empty($psi_urls)) return $html;
-
-    foreach ($psi_urls as $psi_url) {
-        $psi_url = trim($psi_url);
-        if (empty($psi_url)) continue;
-        $basename = preg_quote(basename($psi_url), '/');
-
-        $html = preg_replace_callback(
-            '/<img([^>]*?)>/i',
-            function($matches) use ($basename) {
-                $attrs = $matches[1];
-                if (!preg_match('/' . $basename . '/i', $attrs)) return $matches[0];
-                // すでにpsi-fit-pcのsrcsetが入っている場合はスキップ
-                if (strpos($attrs, '1366w') !== false) return $matches[0];
-
-                // 対象画像のアタッチメントIDを取得してpsi-fit-pcのURLを差し込む
-                if (preg_match('#src=(["\'])([^"\']+)\\1#', $attrs, $src_m)) {
-                    $attachment_id = attachment_url_to_postid($src_m[2]);
-                    if ($attachment_id) {
-                        $psi_img = wp_get_attachment_image_src($attachment_id, 'psi-fit-pc');
-                        if ($psi_img) {
-                            $psi_entry = esc_url($psi_img[0]) . ' ' . $psi_img[1] . 'w';
-                            if (preg_match('#srcset=(["\'])([^"\']*)\\1#', $attrs, $ss_m)) {
-                                $new_srcset = $psi_entry . ', ' . $ss_m[2];
-                                $attrs = str_replace($ss_m[0], 'srcset="' . $new_srcset . '"', $attrs);
-                            } else {
-                                $attrs .= ' srcset="' . $psi_entry . '"';
-                            }
-                            if (strpos($attrs, 'sizes=') === false) {
-                                $attrs .= ' sizes="(max-width: 1366px) 1366px, 100vw"';
-                            }
-                        }
-                    }
-                }
-                return '<img' . $attrs . '>';
-            },
-            $html
-        );
-    }
-    return $html;
 }
 
 // AJAX: 既存WebP画像への一括PSI-fit-pc生成
@@ -2821,16 +2722,20 @@ function spc_generate_psi_bulk() {
         $orig_w = $meta['width']  ?? 0;
         $orig_h = $meta['height'] ?? 0;
         $orig_long = max($orig_w, $orig_h);
-        if ($orig_long < 1366) { $skipped++; continue; }
+        if ($orig_long < 1080) { $skipped++; continue; }
 
-        // psi-fit-pcが既に存在するかチェック
-        if (!empty($meta['sizes']['psi-fit-pc'])) { $skipped++; continue; }
+        // psi-fit-pcが既に存在する場合は古いファイルを削除して再生成
+        if (!empty($meta['sizes']['psi-fit-pc'])) {
+            $old_file = path_join(dirname($file), $meta['sizes']['psi-fit-pc']['file']);
+            if (file_exists($old_file)) @unlink($old_file);
+            unset($meta['sizes']['psi-fit-pc']);
+        }
 
         // サムネイル生成
         $editor = wp_get_image_editor($file);
         if (is_wp_error($editor)) { $errors++; continue; }
 
-        $editor->resize(1366, 9999, false);
+        $editor->resize(1080, 9999, false);
         $editor->set_quality((int)get_option('spc_webp_quality', 75));
 
         $path_info = pathinfo($file);
@@ -2875,7 +2780,7 @@ function spc_render_webp_page() {
     global $_wp_additional_image_sizes;
 
     if ($is_configured === 'no') {
-        $active_sizes = array('thumbnail', 'large');
+        $active_sizes = array('thumbnail', 'medium_large', 'large', 'psi-fit-pc');
     } else {
         $active_sizes = get_option('spc_webp_active_sizes', array());
         if (!is_array($active_sizes)) $active_sizes = array();
@@ -2927,7 +2832,8 @@ function spc_render_webp_page() {
     echo '<th scope="row">作成するサムネイル</th>';
     echo '<td>';
     echo '<p class="description">チェックを入れたサイズのサムネイルのみを生成します。<br>';
-    echo '<span style="color:#d63638;">※注意：テーマやプラグインが必須とする画像サイズは外さないようにしてください。</span></p>';
+    echo '<span style="color:#d63638;">※注意：テーマやプラグインが必須とする画像サイズは外さないようにしてください。</span><br>';
+    echo '<span style="color:#0073aa;">※FVに使用する画像は追加ソースよりカスタム（メディアクエリ）のブレークポイントを設定し、メディアクエリは(max-width: 1366px)、画像は該当画像と同じものにし、Psi Fit Pcのサイズもしくはそれ以下にするとPage Speed Insightsのスコアが改善する可能性があります。</span></p>';
     echo '<fieldset style="margin-top:10px;border:1px solid #ccd0d4;padding:15px;background:#fff;max-height:400px;overflow-y:auto;">';
 
     foreach ($all_sizes as $size) {
@@ -2948,39 +2854,16 @@ function spc_render_webp_page() {
     echo '</td>';
     echo '</tr>';
 
-    // PSI最適化設定
-    $psi_enabled  = get_option('spc_webp_psi_enabled', 'no');
-    $psi_urls_val = get_option('spc_webp_psi_urls', '');
-    $psi_nonce    = wp_create_nonce('spc_psi_bulk_nonce');
-
-    echo '<tr>';
-    echo '<th scope="row">PSI最適化（PC）</th>';
-    echo '<td>';
-    echo '<label>';
-    echo '<input type="checkbox" name="spc_webp_psi_enabled" value="yes"' . checked($psi_enabled, 'yes', false) . '>';
-    echo ' 指定画像にpsi-fit-pc（1366px）をsrcsetで自動配信する';
-    echo '</label>';
-    echo '<p class="description">チェックした場合、下記で指定したLCPヒーロー画像に対してmax-width: 1366px環境でpsi-fit-pcサイズを優先配信します。</p>';
-    echo '</td>';
-    echo '</tr>';
-
-    echo '<tr id="spc_psi_url_row"' . ($psi_enabled !== 'yes' ? ' style="display:none;"' : '') . '>';
-    echo '<th scope="row"><label for="spc_webp_psi_urls">対象画像URL</label></th>';
-    echo '<td>';
-    echo '<textarea id="spc_webp_psi_urls" name="spc_webp_psi_urls" rows="4" style="width:100%;max-width:560px;font-family:monospace;font-size:12px;" placeholder="https://example.com/wp-content/uploads/hero.webp">' . esc_textarea($psi_urls_val) . '</textarea>';
-    echo '<p class="description">1行に1URL。LCPプリロードに設定した画像URLと同じURLを入力してください。</p>';
-    echo '</td>';
-    echo '</tr>';
-
     echo '</table>';
     submit_button('設定を保存');
     echo '</form>';
 
     // 一括PSI-fit-pc生成
+    $psi_nonce = wp_create_nonce('spc_psi_bulk_nonce');
     echo '<hr style="margin:30px 0;">';
     echo '<h2>既存WebP画像へのPSI-fit-pc一括生成</h2>';
-    echo '<p>メディアライブラリ内のWebP画像に対してpsi-fit-pc（1366px）サムネイルを一括生成します。<br>';
-    echo '元画像が1366px未満のもの・すでに生成済みのものはスキップされます。</p>';
+    echo '<p>メディアライブラリ内のWebP画像に対してpsi-fit-pc（1080px）サムネイルを一括生成します。<br>';
+    echo '元画像が1080px未満のもの・すでに生成済みのものはスキップされます（再生成する場合は既存ファイルを削除してから実行してください）。</p>';
     echo '<button type="button" id="spc_psi_bulk_btn" class="button button-secondary">🔄 一括生成を開始</button>';
     echo '<div id="spc_psi_bulk_progress" style="margin-top:12px;display:none;">';
     echo '<div id="spc_psi_bulk_bar_wrap" style="background:#e0e0e0;border-radius:4px;height:18px;width:400px;max-width:100%;overflow:hidden;">';
@@ -2990,9 +2873,6 @@ function spc_render_webp_page() {
     echo '</div>';
 
     echo '<script>';
-    echo 'document.querySelector("[name=spc_webp_psi_enabled]").addEventListener("change", function() {';
-    echo '  document.getElementById("spc_psi_url_row").style.display = this.checked ? "" : "none";';
-    echo '});';
     echo 'document.getElementById("spc_psi_bulk_btn").addEventListener("click", function() {';
     echo '  var btn = this;';
     echo '  btn.disabled = true;';
@@ -3037,6 +2917,16 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.18',
+            'date'    => '2026-04-04',
+            'changes' => [
+                'WebP設定：PSI最適化自動差し替え機能を削除（Bricks側での設定を推奨）',
+                'WebP設定：作成するサムネイルのデフォルト値をthumbnail・medium_large・large・psi-fit-pcに変更',
+                'WebP設定：サムネイル一覧にFV画像のPSI最適化に関する説明文を追加',
+                'WebP設定：psi-fit-pc一括生成ボタンを維持（Bricks用サムネイル生成に使用）',
+            ],
+        ],
+        [
             'version' => '1.17',
             'date'    => '2026-04-04',
             'changes' => [
@@ -3055,7 +2945,7 @@ function spc_render_changelog_page() {
                 'PageSpeed分析：AIプロンプトから「画像最適化は設定済み」の行を削除',
                 'PageSpeed分析：AIプロンプトにSmile Performance有効化済み設定を動的に表示',
                 'LCPヒーロー画像：指定URL画像のimgタグにfetchpriority="high"とloading="eager"を自動付与',
-                'WebP設定：psi-fit-pc（1366px）サムネイルサイズを追加',
+                'WebP設定：psi-fit-pc（1080px）サムネイルサイズを追加（PSI表示幅75vw対応）',
                 'WebP設定：PSI最適化（PC）機能を追加 — 指定URL画像にmax-width: 1366pxでpsi-fit-pcをsrcset自動配信',
                 'WebP設定：既存WebP画像へのpsi-fit-pc一括生成ボタンを追加',
             ],
@@ -3165,7 +3055,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.17');
+        $is_current = ($release['version'] === '1.18');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
