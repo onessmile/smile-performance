@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.18
+ * Version:     1.19
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -699,6 +699,7 @@ function spc_get_settings() {
         'tuning_video_lazy'         => 0,
         'tuning_image_lazy_enhance' => 0,
         'tuning_browser_cache'      => 0,
+        'tuning_css_minify'         => 0,
         'prefetch_enabled'      => 0,
         'prefetch_mobile'       => 0,
         'prefetch_concurrency'  => 2,
@@ -826,6 +827,12 @@ function spc_apply_tuning() {
     // HTML圧縮
     // HTML圧縮機能は削除済み
 
+    // CSS圧縮（単独モードのみ）
+    if (!empty($s['tuning_css_minify']) && !spc_is_litespeed()) {
+        add_filter('style_loader_tag', 'spc_css_minify_enqueued', 99, 4);
+        add_action('wp_head', 'spc_css_minify_inline', 99);
+    }
+
     // 画像遅延読み込み強化
     if (!empty($s['tuning_image_lazy_enhance'])) {
         add_filter('the_content',         'spc_enhance_image_lazy', 20);
@@ -836,6 +843,74 @@ function spc_apply_tuning() {
     if (!empty($s['tuning_browser_cache']) && !spc_is_litespeed()) {
         add_action('send_headers', 'spc_send_browser_cache_headers');
     }
+}
+
+// ============================================================
+// CSS圧縮（単独モードのみ）
+// ============================================================
+
+// CSSミニファイ処理（コメント・空白除去）
+function spc_minify_css_string($css) {
+    if (empty($css)) return $css;
+    // @charset を保持
+    $charset = '';
+    if (preg_match('/^(@charset[^;]+;)/i', $css, $m)) {
+        $charset = $m[1];
+        $css = substr($css, strlen($charset));
+    }
+    // コメント除去（/*!...*/は保持）
+    $css = preg_replace('/\/\*(?!!)[\s\S]*?\*\//', '', $css);
+    // 改行・タブを空白に
+    $css = preg_replace('/[
+	]+/', ' ', $css);
+    // 複数空白を1つに
+    $css = preg_replace('/\s{2,}/', ' ', $css);
+    // セレクタ・プロパティ周辺の不要空白を除去
+    $css = preg_replace('/\s*([:;,{}])\s*/', '$1', $css);
+    $css = preg_replace('/;\}/', '}', $css);
+    // 先頭・末尾の空白除去
+    $css = trim($css);
+    return $charset . $css;
+}
+
+// エンキューCSSのインライン化（小さいファイルのみ圧縮して出力）
+function spc_css_minify_enqueued($tag, $handle, $href, $media) {
+    // 管理画面・ログインページは除外
+    if (is_admin()) return $tag;
+    // 外部ドメインのCSSは除外
+    $site_url = site_url();
+    if (strpos($href, $site_url) === false) return $tag;
+    // クエリ文字列を除去してパスを取得
+    $href_clean = strtok($href, '?');
+    $file_path  = str_replace(site_url('/'), ABSPATH, $href_clean);
+    if (!file_exists($file_path)) return $tag;
+    // 5KB以上はスキップ（大きいファイルはlink tagのままmini化しない）
+    if (filesize($file_path) > 5120) return $tag;
+    $css = file_get_contents($file_path);
+    if ($css === false) return $tag;
+    $minified = spc_minify_css_string($css);
+    $media_attr = $media && $media !== 'all' ? ' media="' . esc_attr($media) . '"' : '';
+    return '<style' . $media_attr . '>' . $minified . '</style>' . "
+";
+}
+
+// インラインCSSの圧縮（wp_head内のstyleタグ）
+function spc_css_minify_inline() {
+    // 出力バッファでwp_headのstyleタグを圧縮
+    ob_start(function($html) {
+        return preg_replace_callback(
+            '/<style([^>]*)>([\s\S]*?)<\/style>/i',
+            function($matches) {
+                $attrs    = $matches[1];
+                $css      = $matches[2];
+                // id属性がbricks-inline-cssまたはbricks-colorsの場合はスキップ
+                if (preg_match('#id=["\']bricks-#i', $attrs)) return $matches[0];
+                $minified = spc_minify_css_string($css);
+                return '<style' . $attrs . '>' . $minified . '</style>';
+            },
+            $html
+        );
+    });
 }
 
 // scroll-timeline.js にdefer属性を付与
@@ -1396,7 +1471,7 @@ function spc_sanitize_settings($input) {
     $s['db_clean_interval'] = in_array($input['db_clean_interval'] ?? '', $valid_intervals, true)
         ? $input['db_clean_interval'] : 'spc_24hours';
 
-    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache'] as $key) {
+    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify'] as $key) {
         $s[$key] = !empty($input[$key]) ? 1 : 0;
     }
     $lcp_urls = $input['tuning_lcp_preload_url'] ?? '';
@@ -1761,6 +1836,20 @@ function spc_render_settings_page() {
         $html .= '<span><strong>' . esc_html($item['label']) . '</strong><br>';
         $html .= '<span style="font-size:.85em;color:#666;">' . esc_html($item['desc']) . '</span></span></label>';
     }
+    // CSS圧縮
+    $css_minify_checked  = !empty($s['tuning_css_minify']) ? ' checked' : '';
+    $css_minify_disabled = ($mode === 'litespeed');
+    $css_minify_opacity  = $css_minify_disabled ? 'opacity:.45;' : '';
+    $css_minify_dis_attr = $css_minify_disabled ? ' disabled' : '';
+    $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px;' . $css_minify_opacity . '">';
+    $html .= '<input type="checkbox" name="spc_settings[tuning_css_minify]" value="1"' . $css_minify_checked . $css_minify_dis_attr . ' style="margin-top:2px;">';
+    $html .= '<span><strong>CSS圧縮</strong><br>';
+    $html .= '<span style="font-size:.85em;color:#666;">CSSのコメント・空白を除去してファイルサイズを削減します（単独モードのみ有効）。<br>';
+    if ($css_minify_disabled) {
+        $html .= '<span style="color:#d63638;font-weight:bold;">⚠️ LiteSpeed Cache 併用モード時はオフになります。</span><br>';
+    }
+    $html .= 'LiteSpeed Cache併用モード時には、LiteSpeed Cacheの設定で対応します。「ページの最適化」⇒「CSS設定」⇒「CSS圧縮化」をオンにして下さい。他の設定はオフにして下さい。</span></span></label>';
+
     // ブラウザキャッシュ
     $bc_disabled  = ($mode === 'litespeed');
     $bc_opacity   = $bc_disabled ? 'opacity:.45;' : '';
@@ -2486,6 +2575,8 @@ function spc_render_pagespeed_page() {
                                                              $spc_active_features[] = 'ブラウザキャッシュ設定';
     if (!empty($spc_settings['tuning_video_lazy']))          $spc_active_features[] = '動画遅延読み込み';
     if (get_option('spc_webp_enable', 'yes') === 'yes')      $spc_active_features[] = 'WebP自動変換';
+    if (!empty($spc_settings['tuning_css_minify']) && !$spc_is_litespeed)
+                                                             $spc_active_features[] = 'CSS圧縮（コメント・空白除去）';
 
     $prompt_features = '';
     if (!empty($spc_active_features)) {
@@ -2495,9 +2586,14 @@ function spc_render_pagespeed_page() {
         }
     }
 
+    // CSS圧縮状態によってプロンプト文言を変更
+    $css_minify_note = !empty($spc_settings['tuning_css_minify']) && !$spc_is_litespeed
+        ? '- CSS圧縮（コメント・空白除去）はSmile Performanceで対応済みです。\\n'
+        : '- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n';
+
     $html .= '  var prompt = "【前提条件】\\n"';
     $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
-    $html .= '    +"- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n"';
+    $html .= '    +"' . $css_minify_note . '"';
     $html .= $prompt_features;
     $html .= '    +"\\n以下はPageSpeed Insightsの計測結果です。\\n"';
     $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\\n"';
@@ -2917,6 +3013,15 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.19',
+            'date'    => '2026-04-04',
+            'changes' => [
+                'CSS圧縮機能を追加（単独モードのみ有効・LiteSpeedモード時は自動無効）',
+                'CSS圧縮設定にLiteSpeed Cache側での対応方法の説明文を追加',
+                'PageSpeed分析：CSS圧縮が有効な場合はAIプロンプトの前提条件を自動更新',
+            ],
+        ],
+        [
             'version' => '1.18',
             'date'    => '2026-04-04',
             'changes' => [
@@ -3055,7 +3160,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.18');
+        $is_current = ($release['version'] === '1.19');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
