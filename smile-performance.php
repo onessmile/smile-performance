@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.19
+ * Version:     1.20
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -700,6 +700,7 @@ function spc_get_settings() {
         'tuning_image_lazy_enhance' => 0,
         'tuning_browser_cache'      => 0,
         'tuning_css_minify'         => 0,
+        'tuning_gzip'               => 0,
         'prefetch_enabled'      => 0,
         'prefetch_mobile'       => 0,
         'prefetch_concurrency'  => 2,
@@ -833,6 +834,12 @@ function spc_apply_tuning() {
         add_action('wp_head', 'spc_css_minify_inline', 99);
     }
 
+    // Gzip/Brotli圧縮（サーバーが未対応の場合のみ有効）
+    if (!empty($s['tuning_gzip'])) {
+        add_action('init', 'spc_start_gzip_compression', 0);
+        add_action('send_headers', 'spc_add_htaccess_compression');
+    }
+
     // 画像遅延読み込み強化
     if (!empty($s['tuning_image_lazy_enhance'])) {
         add_filter('the_content',         'spc_enhance_image_lazy', 20);
@@ -843,6 +850,76 @@ function spc_apply_tuning() {
     if (!empty($s['tuning_browser_cache']) && !spc_is_litespeed()) {
         add_action('send_headers', 'spc_send_browser_cache_headers');
     }
+}
+
+// ============================================================
+// Gzip/Brotli圧縮（サーバー未対応時のフォールバック）
+// ============================================================
+
+// サーバーがすでにgzip/brotliを適用しているか検出
+function spc_server_has_compression() {
+    // Accept-Encodingヘッダーがない場合は不要
+    if (empty($_SERVER['HTTP_ACCEPT_ENCODING'])) return false;
+    // PHP出力圧縮が既に有効な場合
+    if (ini_get('zlib.output_compression')) return true;
+    // サーバーヘッダーでの検出（OpenLiteSpeed/Nginx等）
+    if (function_exists('apache_get_modules')) {
+        $modules = apache_get_modules();
+        if (in_array('mod_deflate', $modules) || in_array('mod_brotli', $modules)) return true;
+    }
+    return false;
+}
+
+// PHPレベルのgzip圧縮（サーバー未対応時のフォールバック）
+function spc_start_gzip_compression() {
+    if (is_admin() || headers_sent()) return;
+    if (spc_server_has_compression()) return;
+    $accept = $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '';
+    if (strpos($accept, 'br') !== false && function_exists('brotli_compress')) {
+        // Brotli対応（php-brotli拡張がある場合）
+        ob_start(function($output) {
+            header('Content-Encoding: br');
+            header('Vary: Accept-Encoding');
+            return brotli_compress($output, 4);
+        });
+    } elseif (strpos($accept, 'gzip') !== false) {
+        // Gzip
+        ob_start('ob_gzhandler');
+        header('Vary: Accept-Encoding');
+    }
+}
+
+// .htaccess にApache用圧縮設定を追記（Apache環境のみ）
+function spc_add_htaccess_compression() {
+    // Apache以外はスキップ
+    if (!function_exists('apache_get_version') && strpos($_SERVER['SERVER_SOFTWARE'] ?? '', 'Apache') === false) return;
+    $htaccess = ABSPATH . '.htaccess';
+    if (!is_writable($htaccess)) return;
+    $content = file_get_contents($htaccess);
+    if (strpos($content, '# SPC Gzip Compression') !== false) return;
+    $gzip_rules = "
+# SPC Gzip Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css application/javascript application/json
+</IfModule>
+<IfModule mod_brotli.c>
+    AddOutputFilterByType BROTLI_COMPRESS text/html text/plain text/css application/javascript application/json
+</IfModule>
+# End SPC Gzip Compression
+";
+    file_put_contents($htaccess, $content . $gzip_rules);
+}
+
+// プラグイン無効化時に.htaccessのGzip設定を削除
+register_deactivation_hook(__FILE__, 'spc_remove_htaccess_compression');
+function spc_remove_htaccess_compression() {
+    $htaccess = ABSPATH . '.htaccess';
+    if (!file_exists($htaccess)) return;
+    $content = file_get_contents($htaccess);
+    $content = preg_replace('/
+# SPC Gzip Compression[\s\S]*?# End SPC Gzip Compression
+/', '', $content);
+    file_put_contents($htaccess, $content);
 }
 
 // ============================================================
@@ -1471,7 +1548,7 @@ function spc_sanitize_settings($input) {
     $s['db_clean_interval'] = in_array($input['db_clean_interval'] ?? '', $valid_intervals, true)
         ? $input['db_clean_interval'] : 'spc_24hours';
 
-    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify'] as $key) {
+    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify','tuning_gzip'] as $key) {
         $s[$key] = !empty($input[$key]) ? 1 : 0;
     }
     $lcp_urls = $input['tuning_lcp_preload_url'] ?? '';
@@ -1849,6 +1926,14 @@ function spc_render_settings_page() {
         $html .= '<span style="color:#d63638;font-weight:bold;">⚠️ LiteSpeed Cache 併用モード時はオフになります。</span><br>';
     }
     $html .= 'LiteSpeed Cache併用モード時には、LiteSpeed Cacheの設定で対応します。「ページの最適化」⇒「CSS設定」⇒「CSS圧縮化」をオンにして下さい。他の設定はオフにして下さい。</span></span></label>';
+
+    // Gzip/Brotli圧縮
+    $gzip_checked = !empty($s['tuning_gzip']) ? ' checked' : '';
+    $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px;">';
+    $html .= '<input type="checkbox" name="spc_settings[tuning_gzip]" value="1"' . $gzip_checked . ' style="margin-top:2px;">';
+    $html .= '<span><strong>テキスト圧縮（Gzip/Brotli）</strong><br>';
+    $html .= '<span style="font-size:.85em;color:#666;">HTMLの転送サイズを削減します。OpenLiteSpeed・Nginx等のサーバーが自動対応している場合は不要です。<br>';
+    $html .= '<span style="color:#0073aa;">※ PageSpeed Insightsで「テキスト圧縮を有効にする」という警告が出ている場合のみオンにしてください。</span></span></span></label>';
 
     // ブラウザキャッシュ
     $bc_disabled  = ($mode === 'litespeed');
@@ -2577,6 +2662,7 @@ function spc_render_pagespeed_page() {
     if (get_option('spc_webp_enable', 'yes') === 'yes')      $spc_active_features[] = 'WebP自動変換';
     if (!empty($spc_settings['tuning_css_minify']) && !$spc_is_litespeed)
                                                              $spc_active_features[] = 'CSS圧縮（コメント・空白除去）';
+    if (!empty($spc_settings['tuning_gzip']))                $spc_active_features[] = 'テキスト圧縮（Gzip/Brotliフォールバック）';
 
     $prompt_features = '';
     if (!empty($spc_active_features)) {
@@ -3013,6 +3099,16 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.20',
+            'date'    => '2026-04-04',
+            'changes' => [
+                'テキスト圧縮（Gzip/Brotli）機能を追加',
+                'サーバーが自動対応済みの場合は自動検出してスキップ',
+                'Apache環境では.htaccessにmod_deflate/mod_brotli設定を自動追記',
+                'プラグイン無効化時に.htaccess設定を自動削除',
+            ],
+        ],
+        [
             'version' => '1.19',
             'date'    => '2026-04-04',
             'changes' => [
@@ -3160,7 +3256,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.19');
+        $is_current = ($release['version'] === '1.20');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
