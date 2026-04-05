@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.22
+ * Version:     1.23
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2719,9 +2719,21 @@ function spc_render_pagespeed_page() {
         ? ' +"- 制作中サイトのためnoindexを有効化しています（SEOスコアは参考値です）。\\n"'
         : '';
 
+    // BricksのCSS読み込み方法を取得
+    $bricks_settings   = get_option('bricks_settings', array());
+    $bricks_css_loading = $bricks_settings['cssLoading'] ?? 'inline';
+    $bricks_css_label   = match($bricks_css_loading) {
+        'file'        => '外部ファイル',
+        'inline'      => 'インラインスタイル（デフォルト）',
+        default       => $bricks_css_loading,
+    };
+    $bricks_css_note = '- BricksのCSS読み込み方法は「' . $bricks_css_label . '」に設定しています。\\n';
+
     $html .= '  var prompt = "【前提条件】\\n"';
     $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
     $html .= '    +"' . $css_minify_note . '"';
+    $html .= '    +"' . $bricks_css_note . '"';
+    $html .= '    +"- CSS非同期読み込み・クリティカルCSS生成はBricksに影響が出る可能性があるため実施しない。\\n"';
     $html .= '    +"- JS圧縮はBricksに影響を及ぼす可能性があるため実施せず。\\n"';
     $html .= $noindex_note;
     $html .= $prompt_features;
@@ -3143,6 +3155,14 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.23',
+            'date'    => '2026-04-05',
+            'changes' => [
+                'PageSpeed分析：AIプロンプトにBricksのCSS読み込み方法を動的追加',
+                'PageSpeed分析：AIプロンプトに「CSSの非同期読み込み・クリティカルCSS生成はBricksに影響が出る可能性があるため実施しない」を追加',
+            ],
+        ],
+        [
             'version' => '1.22',
             'date'    => '2026-04-05',
             'changes' => [
@@ -3318,7 +3338,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.22');
+        $is_current = ($release['version'] === '1.23');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
