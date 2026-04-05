@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.25
+ * Version:     1.26
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -1218,6 +1218,10 @@ function spc_write_browser_cache_htaccess() {
     $rules[] = '    ExpiresByType font/woff              "access plus 1 year"';
     $rules[] = '    ExpiresByType text/css               "access plus 1 month"';
     $rules[] = '    ExpiresByType application/javascript "access plus 1 month"';
+    $rules[] = '    ExpiresByType video/mp4              "access plus 1 year"';
+    $rules[] = '    ExpiresByType video/webm             "access plus 1 year"';
+    $rules[] = '    ExpiresByType video/ogg              "access plus 1 year"';
+    $rules[] = '    ExpiresByType video/quicktime        "access plus 1 year"';
     $rules[] = '</IfModule>';
     $rules[] = '<IfModule mod_headers.c>';
     $rules[] = '    <FilesMatch "\.(webp|jpg|jpeg|png|gif|svg|ico|woff2|woff)$">';
@@ -1225,6 +1229,9 @@ function spc_write_browser_cache_htaccess() {
     $rules[] = '    </FilesMatch>';
     $rules[] = '    <FilesMatch "\.(css|js)$">';
     $rules[] = '        Header set Cache-Control "public, max-age=2592000"';
+    $rules[] = '    </FilesMatch>';
+    $rules[] = '    <FilesMatch "\.(mp4|webm|ogv|mov)$">';
+    $rules[] = '        Header set Cache-Control "public, max-age=31536000"';
     $rules[] = '    </FilesMatch>';
     $rules[] = '</IfModule>';
 
@@ -3172,6 +3179,13 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.26',
+            'date'    => '2026-04-06',
+            'changes' => [
+                'ブラウザキャッシュ最適化：動画ファイル（mp4・webm・ogv・mov）のキャッシュ設定を追加',
+            ],
+        ],
+        [
             'version' => '1.25',
             'date'    => '2026-04-06',
             'changes' => [
@@ -3372,7 +3386,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.25');
+        $is_current = ($release['version'] === '1.26');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
