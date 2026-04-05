@@ -2327,6 +2327,15 @@ function spc_render_pagespeed_page() {
         $html .= '<p style="color:#d63638;font-size:13px;margin:-8px 0 12px;">⚠️ 現在noindexが有効になっています（検索エンジンにインデックスされない設定です）。</p>';
     }
 
+    // PSI直接リンク説明文
+    $spc_site_url = home_url('/');
+    $spc_psi_direct_url = 'https://pagespeed.web.dev/analysis?url=' . urlencode($spc_site_url);
+    $html .= '<div style="font-size:13px;color:#555;margin-bottom:16px;line-height:1.8;">';
+    $html .= '一部情報は取得できない場合があり、API使用のためリアルタイムのスコアを取得できない場合があります。<br>';
+    $html .= 'すぐに計測したい場合は直接以下URLよりPageSpeed Insightsで確認して下さい。<br>';
+    $html .= '<a href="' . esc_url($spc_psi_direct_url) . '" target="_blank" rel="noopener noreferrer" style="color:#0073aa;word-break:break-all;">' . esc_html($spc_psi_direct_url) . '</a>';
+    $html .= '</div>';
+
     if (isset($_GET['key_saved'])) {
         $html .= '<div class="notice notice-success is-dismissible"><p>✅ APIキーを保存しました。</p></div>';
     }
@@ -2464,7 +2473,7 @@ function spc_render_pagespeed_page() {
     $html .= '  html+=\'</div>\';';
 
     // 改善が必要な項目
-    $html .= '  var skipIds=["screenshot-thumbnails","final-screenshot","full-page-screenshot","network-requests","main-thread-tasks","metrics","resource-summary","third-party-summary","uses-long-cache-ttl","user-timings","largest-contentful-paint-element","lcp-lazy-loaded"];';
+    $html .= '  var skipIds=["screenshot-thumbnails","final-screenshot","full-page-screenshot","network-requests","main-thread-tasks","metrics","resource-summary","third-party-summary","uses-long-cache-ttl","user-timings","largest-contentful-paint-element","lcp-lazy-loaded","critical-request-chains"];';
     $html .= '  var failed=Object.values(audits).filter(function(a){';
     $html .= '    return a.score!==null&&a.score!==undefined&&a.score<0.9&&a.title&&skipIds.indexOf(a.id)===-1;';
     $html .= '  }).sort(function(a,b){return (a.score||0)-(b.score||0);}).slice(0,15);';
@@ -2484,8 +2493,14 @@ function spc_render_pagespeed_page() {
     // 説明文
     $html .= '      if(desc) detailHtml+=\'<div style="font-size:12px;color:#555;margin-bottom:10px;line-height:1.7;">\'+desc+\'</div>\';';
 
+    // critical-request-chains：a.idで確実に判定（APIの仕様変更に対応）
+    $html .= '      if(a.id==="critical-request-chains"){';
+    $html .= '        var psUrlCrc="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.8;">本ツールではツリーを取得できないため、詳しくはPageSpeed Insightsの結果を確認して下さい。<br><a href="\'+psUrlCrc+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;word-break:break-all;">\'+psUrlCrc+\'</a></div>\';';
+    $html .= '      }';
+
     // table形式
-    $html .= '      if(a.details&&a.details.type==="table"&&a.details.items&&a.details.items.length>0){';
+    $html .= '      else if(a.details&&a.details.type==="table"&&a.details.items&&a.details.items.length>0){';
     $html .= '        var items=a.details.items.slice(0,8);';
     $html .= '        var headings=a.details.headings||[];';
     $html .= '        detailHtml+=\'<div style="overflow-x:auto;">\';';
@@ -2607,36 +2622,7 @@ function spc_render_pagespeed_page() {
     $html .= '        detailHtml+=\'</div>\';';
     $html .= '      }';
 
-    // criticalrequestchains形式（ネットワークの依存関係ツリー）
-    $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
-    $html .= '        var psUrlCrc="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
-    $html .= '        var crcLines=[];';
-    $html .= '        function spcWalkChain(chains,depth){';
-    $html .= '          if(!chains||typeof chains!=="object") return;';
-    $html .= '          Object.keys(chains).forEach(function(k){';
-    $html .= '            var node=chains[k];';
-    $html .= '            if(!node) return;';
-    $html .= '            var req=node.request||{};';
-    $html .= '            var url2=(req.url||"").replace(/^https?:\/\//,"").substring(0,60);';
-    $html .= '            var dur=req.endTime&&req.startTime?Math.round((req.endTime-req.startTime)*1000)+"ms":"";';
-    $html .= '            var size=req.transferSize?Math.round(req.transferSize/1024)+"KiB":"";';
-    $html .= '            var pad="　".repeat(depth);';
-    $html .= '            if(url2) crcLines.push(pad+(depth>0?"└ ":"")+url2+(dur?" "+dur:"")+(size?" "+size:""));';
-    $html .= '            if(node.children) spcWalkChain(node.children,depth+1);';
-    $html .= '          });';
-    $html .= '        }';
-    $html .= '        spcWalkChain(a.details.chains||{},0);';
-    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.8;">\'';
-    $html .= '          +\'<div style="margin-bottom:6px;">詳細はPageSpeed Insightsで確認してください：<br>\'';
-    $html .= '          +\'<a href="\'+psUrlCrc+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;word-break:break-all;">\'+psUrlCrc+\'</a></div>\';';
-    $html .= '        if(crcLines.length>0){';
-    $html .= '          detailHtml+=\'<div style="font-family:monospace;font-size:11px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:3px;padding:8px;line-height:1.8;overflow-x:auto;">\';';
-    $html .= '          crcLines.slice(0,15).forEach(function(l){ detailHtml+=\'<div style="white-space:nowrap;">\'+l+\'</div>\'; });';
-    $html .= '          if(crcLines.length>15) detailHtml+=\'<div style="color:#888;">他\'+(crcLines.length-15)+\'件</div>\';';
-    $html .= '          detailHtml+=\'</div>\';';
-    $html .= '        }';
-    $html .= '        detailHtml+=\'</div>\';';
-    $html .= '      }';
+
 
     // 折りたたみUI
     $html .= '      html+=\'<div style="background:#fff;border:1px solid #ddd;border-radius:4px;margin-bottom:6px;">\';';
@@ -2696,7 +2682,7 @@ function spc_render_pagespeed_page() {
     $html .= '      });';
     $html .= '      if(a.details.items.length>3) textLines.push("  ... 他"+(a.details.items.length-3)+"件");';
     $html .= '    }';
-    $html .= '    if(a.details&&a.details.type==="criticalrequestchain"){';
+    $html .= '    if(a.id==="critical-request-chains"){';
     $html .= '      var psUrl="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(url);';
     $html .= '      textLines.push("  詳細はPageSpeed Insightsで確認: "+psUrl);';
     $html .= '    }';
@@ -3190,6 +3176,8 @@ function spc_render_changelog_page() {
             'date'    => '2026-04-06',
             'changes' => [
                 'PageSpeed分析：AIプロンプトに「画像ブラーフェードインはオンにしてもスコアに影響が無いことが確認済み」を追加',
+                'PageSpeed分析：ネットワークの依存関係ツリーをskipIdsに追加して[object Object]表示を完全解消',
+                'PageSpeed分析：タイトル下にPSI直接リンクの説明文を追加',
             ],
         ],
         [
