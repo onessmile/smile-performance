@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.24
+ * Version:     1.25
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2609,8 +2609,33 @@ function spc_render_pagespeed_page() {
 
     // criticalrequestchains形式（ネットワークの依存関係ツリー）
     $html .= '      else if(a.details&&a.details.type==="criticalrequestchain"){';
-    $html .= '        var psUrl="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
-    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.7;">詳細はPage Speed Insightsのサイトへ直接アクセスし、結果を確認して下さい。<br><a href="\'+psUrl+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;">\'+psUrl+\'</a></div>\';';
+    $html .= '        var psUrlCrc="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(document.getElementById("spc_ps_url").value);';
+    $html .= '        var crcLines=[];';
+    $html .= '        function spcWalkChain(chains,depth){';
+    $html .= '          if(!chains||typeof chains!=="object") return;';
+    $html .= '          Object.keys(chains).forEach(function(k){';
+    $html .= '            var node=chains[k];';
+    $html .= '            if(!node) return;';
+    $html .= '            var req=node.request||{};';
+    $html .= '            var url2=(req.url||"").replace(/^https?:\/\//,"").substring(0,60);';
+    $html .= '            var dur=req.endTime&&req.startTime?Math.round((req.endTime-req.startTime)*1000)+"ms":"";';
+    $html .= '            var size=req.transferSize?Math.round(req.transferSize/1024)+"KiB":"";';
+    $html .= '            var pad="　".repeat(depth);';
+    $html .= '            if(url2) crcLines.push(pad+(depth>0?"└ ":"")+url2+(dur?" "+dur:"")+(size?" "+size:""));';
+    $html .= '            if(node.children) spcWalkChain(node.children,depth+1);';
+    $html .= '          });';
+    $html .= '        }';
+    $html .= '        spcWalkChain(a.details.chains||{},0);';
+    $html .= '        detailHtml+=\'<div style="font-size:12px;color:#555;line-height:1.8;">\'';
+    $html .= '          +\'<div style="margin-bottom:6px;">詳細はPageSpeed Insightsで確認してください：<br>\'';
+    $html .= '          +\'<a href="\'+psUrlCrc+\'" target="_blank" rel="noopener noreferrer" style="color:#0073aa;word-break:break-all;">\'+psUrlCrc+\'</a></div>\';';
+    $html .= '        if(crcLines.length>0){';
+    $html .= '          detailHtml+=\'<div style="font-family:monospace;font-size:11px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:3px;padding:8px;line-height:1.8;overflow-x:auto;">\';';
+    $html .= '          crcLines.slice(0,15).forEach(function(l){ detailHtml+=\'<div style="white-space:nowrap;">\'+l+\'</div>\'; });';
+    $html .= '          if(crcLines.length>15) detailHtml+=\'<div style="color:#888;">他\'+(crcLines.length-15)+\'件</div>\';';
+    $html .= '          detailHtml+=\'</div>\';';
+    $html .= '        }';
+    $html .= '        detailHtml+=\'</div>\';';
     $html .= '      }';
 
     // 折りたたみUI
@@ -2670,6 +2695,10 @@ function spc_render_pagespeed_page() {
     $html .= '        if(parts.length>0) textLines.push("  - "+parts.join(" | "));';
     $html .= '      });';
     $html .= '      if(a.details.items.length>3) textLines.push("  ... 他"+(a.details.items.length-3)+"件");';
+    $html .= '    }';
+    $html .= '    if(a.details&&a.details.type==="criticalrequestchain"){';
+    $html .= '      var psUrl="https://pagespeed.web.dev/analysis?url="+encodeURIComponent(url);';
+    $html .= '      textLines.push("  詳細はPageSpeed Insightsで確認: "+psUrl);';
     $html .= '    }';
     $html .= '    textLines.push("");';
     $html .= '  });';
@@ -2735,6 +2764,7 @@ function spc_render_pagespeed_page() {
     $html .= '    +"' . $bricks_css_note . '"';
     $html .= '    +"- CSS非同期読み込み・クリティカルCSS生成はBricksに影響が出る可能性があるため実施しない。\\n"';
     $html .= '    +"- CSSファイルのPreloadはPSIスコアが低下することが確認されているため実施しない。\\n"';
+    $html .= '    +"- 画像ブラーフェードインはオンにしてもスコアに影響が無いことが確認済み。\\n"';
     $html .= '    +"- JS圧縮はBricksに影響を及ぼす可能性があるため実施せず。\\n"';
     $html .= $noindex_note;
     $html .= $prompt_features;
@@ -3156,10 +3186,18 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.25',
+            'date'    => '2026-04-06',
+            'changes' => [
+                'PageSpeed分析：AIプロンプトに「画像ブラーフェードインはオンにしてもスコアに影響が無いことが確認済み」を追加',
+            ],
+        ],
+        [
             'version' => '1.24',
             'date'    => '2026-04-06',
             'changes' => [
                 'PageSpeed分析：AIプロンプトに「CSSファイルのPreloadはPSIスコアが低下することが確認されているため実施しない」を追加',
+                'PageSpeed分析：ネットワークの依存関係ツリーのAIプロンプト出力を修正（PageSpeed InsightsのURLリンクを追加）',
             ],
         ],
         [
@@ -3346,7 +3384,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.24');
+        $is_current = ($release['version'] === '1.25');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
