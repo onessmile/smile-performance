@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.20
+ * Version:     1.22
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -700,6 +700,7 @@ function spc_get_settings() {
         'tuning_image_lazy_enhance' => 0,
         'tuning_browser_cache'      => 0,
         'tuning_css_minify'         => 0,
+        'tuning_css_minify_limit'   => 110,
         'tuning_gzip'               => 0,
         'prefetch_enabled'      => 0,
         'prefetch_mobile'       => 0,
@@ -961,11 +962,19 @@ function spc_css_minify_enqueued($tag, $handle, $href, $media) {
     $href_clean = strtok($href, '?');
     $file_path  = str_replace(site_url('/'), ABSPATH, $href_clean);
     if (!file_exists($file_path)) return $tag;
-    // 5KB以上はスキップ（大きいファイルはlink tagのままmini化しない）
-    if (filesize($file_path) > 5120) return $tag;
+    // 設定の上限サイズを取得（デフォルト110KB）
+    $spc_s = spc_get_settings();
+    $limit_kb = (int)($spc_s['tuning_css_minify_limit'] ?? 110);
+    if (filesize($file_path) > $limit_kb * 1024) return $tag;
     $css = file_get_contents($file_path);
     if ($css === false) return $tag;
-    $minified = spc_minify_css_string($css);
+    // .min.cssは既圧縮のためコメント除去のみ軽量処理
+    if (strpos($href_clean, '.min.css') !== false) {
+        $minified = preg_replace('#/\*(?!!)[\s\S]*?\*/#', '', $css);
+        $minified = trim($minified);
+    } else {
+        $minified = spc_minify_css_string($css);
+    }
     $media_attr = $media && $media !== 'all' ? ' media="' . esc_attr($media) . '"' : '';
     return '<style' . $media_attr . '>' . $minified . '</style>' . "
 ";
@@ -1548,6 +1557,10 @@ function spc_sanitize_settings($input) {
     $s['db_clean_interval'] = in_array($input['db_clean_interval'] ?? '', $valid_intervals, true)
         ? $input['db_clean_interval'] : 'spc_24hours';
 
+    // CSS圧縮上限サイズ（1〜500KBの範囲で）
+    $css_limit = (int)($input['tuning_css_minify_limit'] ?? 110);
+    $s['tuning_css_minify_limit'] = max(1, min(500, $css_limit));
+
     foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify','tuning_gzip'] as $key) {
         $s[$key] = !empty($input[$key]) ? 1 : 0;
     }
@@ -1927,6 +1940,16 @@ function spc_render_settings_page() {
     }
     $html .= 'LiteSpeed Cache併用モード時には、LiteSpeed Cacheの設定で対応します。「ページの最適化」⇒「CSS設定」⇒「CSS圧縮化」をオンにして下さい。他の設定はオフにして下さい。</span></span></label>';
 
+    // CSS圧縮上限サイズ
+    $css_limit_val = (int)($s['tuning_css_minify_limit'] ?? 110);
+    $css_limit_opacity = $css_minify_disabled ? 'opacity:.45;' : '';
+    $html .= '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;padding-left:26px;' . $css_limit_opacity . '">';
+    $html .= '<label for="spc_css_minify_limit" style="font-size:13px;color:#444;">圧縮対象の上限ファイルサイズ：</label>';
+    $html .= '<input type="number" id="spc_css_minify_limit" name="spc_settings[tuning_css_minify_limit]" value="' . esc_attr($css_limit_val) . '" min="1" max="500"' . $css_minify_dis_attr . ' style="width:70px;">';
+    $html .= '<span style="font-size:13px;color:#444;">KB</span>';
+    $html .= '<span style="font-size:12px;color:#888;">（デフォルト：110KB・推奨範囲：50〜200KB）</span>';
+    $html .= '</div>';
+
     // Gzip/Brotli圧縮
     $gzip_checked = !empty($s['tuning_gzip']) ? ' checked' : '';
     $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px;">';
@@ -2293,8 +2316,16 @@ function spc_render_pagespeed_page() {
     $spc_cache_mode = $spc_settings['cache_mode'] ?? 'standalone';
     $spc_is_litespeed = ($spc_cache_mode === 'litespeed');
 
+    // noindex設定を検出
+    $spc_noindex = (bool) get_option('blog_public') === false;
+
     $html = '<div class="wrap">';
     $html .= '<h1>📊 PageSpeed分析</h1>';
+
+    // noindex警告
+    if ($spc_noindex) {
+        $html .= '<p style="color:#d63638;font-size:13px;margin:-8px 0 12px;">⚠️ 現在noindexが有効になっています（検索エンジンにインデックスされない設定です）。</p>';
+    }
 
     if (isset($_GET['key_saved'])) {
         $html .= '<div class="notice notice-success is-dismissible"><p>✅ APIキーを保存しました。</p></div>';
@@ -2563,8 +2594,14 @@ function spc_render_pagespeed_page() {
     $html .= '            detailHtml+=\'</tbody></table>\';';
     $html .= '          } else if(typeof item==="string"){';
     $html .= '            detailHtml+=\'<div style="padding:3px 0;color:#555;">\'+item+\'</div>\';';
-    $html .= '          } else if(item.value){';
-    $html .= '            detailHtml+=\'<div style="padding:3px 0;color:#555;">\'+String(item.value).substring(0,200)+\'</div>\';';
+    $html .= '          } else if(item&&typeof item==="object"){';
+    $html .= '            var itemStr="";';
+    $html .= '            if(item.url) itemStr+=item.url;';
+    $html .= '            else if(item.value!==undefined) itemStr+=String(item.value);';
+    $html .= '            else if(item.text) itemStr+=item.text;';
+    $html .= '            else if(item.label) itemStr+=item.label;';
+    $html .= '            else { try{ itemStr=JSON.stringify(item).substring(0,200); }catch(e){ itemStr=""; } }';
+    $html .= '            if(itemStr) detailHtml+=\'<div style="padding:3px 0;color:#555;">\'+itemStr+\'</div>\';';
     $html .= '          }';
     $html .= '        });';
     $html .= '        detailHtml+=\'</div>\';';
@@ -2677,9 +2714,16 @@ function spc_render_pagespeed_page() {
         ? '- CSS圧縮（コメント・空白除去）はSmile Performanceで対応済みです。\\n'
         : '- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n';
 
+    // noindex状態のプロンプト文言
+    $noindex_note = $spc_noindex
+        ? ' +"- 制作中サイトのためnoindexを有効化しています（SEOスコアは参考値です）。\\n"'
+        : '';
+
     $html .= '  var prompt = "【前提条件】\\n"';
     $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
     $html .= '    +"' . $css_minify_note . '"';
+    $html .= '    +"- JS圧縮はBricksに影響を及ぼす可能性があるため実施せず。\\n"';
+    $html .= $noindex_note;
     $html .= $prompt_features;
     $html .= '    +"\\n以下はPageSpeed Insightsの計測結果です。\\n"';
     $html .= '    +"WordPressサイト（Bricks Builder使用）のパフォーマンス改善に特化した観点で、\\n"';
@@ -3099,6 +3143,24 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.22',
+            'date'    => '2026-04-05',
+            'changes' => [
+                'PageSpeed分析：ネットワークの依存関係ツリーの[object Object]表示を修正',
+                'PageSpeed分析：noindex有効時にタイトル下に赤文字で警告を表示',
+                'PageSpeed分析：AIプロンプトに「JS圧縮はBricksに影響を及ぼす可能性があるため実施せず」を追加',
+                'PageSpeed分析：noindex有効時にAIプロンプトへ「制作中サイトのためnoindexを有効化」を動的追加',
+            ],
+        ],
+        [
+            'version' => '1.21',
+            'date'    => '2026-04-05',
+            'changes' => [
+                'CSS圧縮：対象ファイルの上限サイズを5KB→デフォルト110KBに変更（設定画面で1〜500KBの範囲で変更可能）',
+                'CSS圧縮：.min.cssファイルもコメント除去による軽量処理の対象に追加',
+            ],
+        ],
+        [
             'version' => '1.20',
             'date'    => '2026-04-04',
             'changes' => [
@@ -3256,7 +3318,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.20');
+        $is_current = ($release['version'] === '1.22');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
