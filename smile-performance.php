@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.23
+ * Version:     1.24
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2734,6 +2734,7 @@ function spc_render_pagespeed_page() {
     $html .= '    +"' . $css_minify_note . '"';
     $html .= '    +"' . $bricks_css_note . '"';
     $html .= '    +"- CSS非同期読み込み・クリティカルCSS生成はBricksに影響が出る可能性があるため実施しない。\\n"';
+    $html .= '    +"- CSSファイルのPreloadはPSIスコアが低下することが確認されているため実施しない。\\n"';
     $html .= '    +"- JS圧縮はBricksに影響を及ぼす可能性があるため実施せず。\\n"';
     $html .= $noindex_note;
     $html .= $prompt_features;
@@ -3155,6 +3156,13 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.24',
+            'date'    => '2026-04-06',
+            'changes' => [
+                'PageSpeed分析：AIプロンプトに「CSSファイルのPreloadはPSIスコアが低下することが確認されているため実施しない」を追加',
+            ],
+        ],
+        [
             'version' => '1.23',
             'date'    => '2026-04-05',
             'changes' => [
@@ -3338,7 +3346,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.23');
+        $is_current = ($release['version'] === '1.24');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
