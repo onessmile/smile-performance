@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.26
+ * Version:     1.28
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -14,6 +14,11 @@
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
+
+// Bricksビルダー編集画面かどうかを検出
+function spc_is_bricks_builder() {
+    return isset($_GET['bricks']) || (defined('BRICKS_VERSION') && isset($_GET['bricks']));
+}
 
 // エラーをファイルに記録
 set_error_handler(function($errno, $errstr, $errfile, $errline) {
@@ -700,6 +705,7 @@ function spc_get_settings() {
         'tuning_image_lazy_enhance' => 0,
         'tuning_browser_cache'      => 0,
         'tuning_css_minify'         => 0,
+        'tuning_css_minify_inline'  => 0,
         'tuning_css_minify_limit'   => 110,
         'tuning_gzip'               => 0,
         'prefetch_enabled'      => 0,
@@ -829,9 +835,12 @@ function spc_apply_tuning() {
     // HTML圧縮
     // HTML圧縮機能は削除済み
 
-    // CSS圧縮（単独モードのみ）
-    if (!empty($s['tuning_css_minify']) && !spc_is_litespeed()) {
+    // CSS圧縮（単独モードのみ・Bricks編集画面を除外）
+    if (!empty($s['tuning_css_minify']) && !spc_is_litespeed() && !spc_is_bricks_builder()) {
         add_filter('style_loader_tag', 'spc_css_minify_enqueued', 99, 4);
+    }
+    // インラインCSS圧縮（別途チェックボックスで制御）
+    if (!empty($s['tuning_css_minify']) && !empty($s['tuning_css_minify_inline']) && !spc_is_litespeed() && !spc_is_bricks_builder()) {
         add_action('wp_head', 'spc_css_minify_inline', 99);
     }
 
@@ -953,8 +962,13 @@ function spc_minify_css_string($css) {
 
 // エンキューCSSのインライン化（小さいファイルのみ圧縮して出力）
 function spc_css_minify_enqueued($tag, $handle, $href, $media) {
-    // 管理画面・ログインページは除外
-    if (is_admin()) return $tag;
+    // 管理画面・Bricks編集画面・ログインページは除外
+    if (is_admin() || spc_is_bricks_builder()) return $tag;
+    // アイコン関連CSSは除外（fontawesome・ionicons・themify等）
+    $icon_patterns = ['fontawesome', 'font-awesome', 'ionicons', 'themify', 'dashicons', 'genericons'];
+    foreach ($icon_patterns as $pattern) {
+        if (stripos($href, $pattern) !== false) return $tag;
+    }
     // 外部ドメインのCSSは除外
     $site_url = site_url();
     if (strpos($href, $site_url) === false) return $tag;
@@ -968,6 +982,8 @@ function spc_css_minify_enqueued($tag, $handle, $href, $media) {
     if (filesize($file_path) > $limit_kb * 1024) return $tag;
     $css = file_get_contents($file_path);
     if ($css === false) return $tag;
+    // @font-faceを含むCSSはURLパスが壊れる可能性があるためスキップ
+    if (stripos($css, '@font-face') !== false) return $tag;
     // .min.cssは既圧縮のためコメント除去のみ軽量処理
     if (strpos($href_clean, '.min.css') !== false) {
         $minified = preg_replace('#/\*(?!!)[\s\S]*?\*/#', '', $css);
@@ -982,6 +998,8 @@ function spc_css_minify_enqueued($tag, $handle, $href, $media) {
 
 // インラインCSSの圧縮（wp_head内のstyleタグ）
 function spc_css_minify_inline() {
+    // Bricks編集画面は除外
+    if (spc_is_bricks_builder()) return;
     // 出力バッファでwp_headのstyleタグを圧縮
     ob_start(function($html) {
         return preg_replace_callback(
@@ -1568,7 +1586,7 @@ function spc_sanitize_settings($input) {
     $css_limit = (int)($input['tuning_css_minify_limit'] ?? 110);
     $s['tuning_css_minify_limit'] = max(1, min(500, $css_limit));
 
-    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify','tuning_gzip'] as $key) {
+    foreach (['tuning_dns_prefetch','tuning_dns_prefetch_fonts','tuning_emoji','tuning_oembed','tuning_query_strings','tuning_rss','tuning_header_cleanup','tuning_iframe_lazy','tuning_image_blur_lazy','tuning_js_defer','tuning_lcp_preload','tuning_font_preload','tuning_video_preload_none','tuning_video_lazy','tuning_image_lazy_enhance','tuning_browser_cache','tuning_css_minify','tuning_css_minify_inline','tuning_gzip'] as $key) {
         $s[$key] = !empty($input[$key]) ? 1 : 0;
     }
     $lcp_urls = $input['tuning_lcp_preload_url'] ?? '';
@@ -1956,6 +1974,14 @@ function spc_render_settings_page() {
     $html .= '<span style="font-size:13px;color:#444;">KB</span>';
     $html .= '<span style="font-size:12px;color:#888;">（デフォルト：110KB・推奨範囲：50〜200KB）</span>';
     $html .= '</div>';
+
+    // インラインCSS圧縮
+    $css_inline_checked = !empty($s['tuning_css_minify_inline']) ? ' checked' : '';
+    $html .= '<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:4px;padding-left:26px;' . $css_minify_opacity . '">';
+    $html .= '<input type="checkbox" name="spc_settings[tuning_css_minify_inline]" value="1"' . $css_inline_checked . $css_minify_dis_attr . ' style="margin-top:2px;">';
+    $html .= '<span><strong>インラインCSS圧縮</strong><br>';
+    $html .= '<span style="font-size:.85em;color:#666;">HTMLに埋め込まれた&lt;style&gt;タグ内のCSSも圧縮します。<br>';
+    $html .= '<span style="font-size:.85em;color:#d63638;font-weight:bold;">⚠️ BricksforgeまたはNextBricksをインストールしている場合はパフォーマンス悪化のリスクがあるため、オフを推奨します。</span></span></span></label>';
 
     // Gzip/Brotli圧縮
     $gzip_checked = !empty($s['tuning_gzip']) ? ' checked' : '';
@@ -3179,6 +3205,23 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.28',
+            'date'    => '2026-04-06',
+            'changes' => [
+                'CSS圧縮：インラインCSS圧縮を別チェックボックスに分離（デフォルトオフ）',
+                'CSS圧縮：インラインCSS圧縮にBricksforge・NextBricks使用時のオフ推奨警告を追加',
+            ],
+        ],
+        [
+            'version' => '1.27',
+            'date'    => '2026-04-06',
+            'changes' => [
+                'CSS圧縮：Bricksビルダー編集画面（?bricks=run）では無効化',
+                'CSS圧縮：アイコンフォント関連CSS（FontAwesome・Ionicons・Themify等）を除外',
+                'CSS圧縮：@font-faceを含むCSSはURLパス破損防止のためスキップ',
+            ],
+        ],
+        [
             'version' => '1.26',
             'date'    => '2026-04-06',
             'changes' => [
@@ -3386,7 +3429,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.26');
+        $is_current = ($release['version'] === '1.28');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
