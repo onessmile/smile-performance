@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.28
+ * Version:     1.29
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2009,7 +2009,14 @@ function spc_render_settings_page() {
     $html .= '<span><strong>LCPヒーロー画像</strong><br><span style="font-size:.85em;color:#666;">ヒーロー画像のURLを指定してpreload、fetchpriority=&quot;high&quot;、loading=&quot;eager&quot;を自動付与します。PC・モバイルで異なる画像の場合は両方のURLを入力してください。</span></span></label>';
     $html .= '<div id="spc_lcp_url_wrap" style="' . $lcp_vis . 'padding-left:24px;margin-bottom:10px;">';
     $html .= '<textarea name="spc_settings[tuning_lcp_preload_url]" rows="3" style="width:100%;max-width:560px;font-family:monospace;font-size:12px;" placeholder="https://example.com/wp-content/uploads/hero-pc.webp&#10;https://example.com/wp-content/uploads/hero-sp.webp">' . esc_textarea($lcp_preload_url) . '</textarea>';
-    $html .= '<p class="description">1行に1URLで複数入力可能です。メディアライブラリから画像URLをコピーして貼り付けてください。</p></div>';
+    $html .= '<p class="description">1行に1URLで複数入力可能です。メディアライブラリから画像URLをコピーして貼り付けてください。</p>';
+    $html .= '<div style="margin-top:10px;font-size:12px;color:#555;line-height:1.9;border-left:3px solid #72aee6;padding:8px 12px;background:#f0f6fc;border-radius:0 4px 4px 0;">';
+    $html .= '<strong>※ヒーロー画像のブレークポイント設定について（PSIスコア向上に有効な場合があります）</strong><br>';
+    $html .= '・画像要素の画像指定の下にある「追加ソース」を押します。<br>';
+    $html .= '・ブレークポイントは「カスタム（メディアクエリ）」を選択し、<code>(max-width: 1366px)</code> を入力してください。<br>';
+    $html .= '・全幅画像の場合は1080px程度の画像をアップするか、同じ画像を選択して「PSI-fit-PC（1080×689）」の画質を設定してください。<br>';
+    $html .= '・全幅画像ではない場合は上記以下のサイズ（480pxなど）の画像を設定してください。';
+    $html .= '</div></div>';
     $html .= '</td></tr>';
 
     // フォームnonce
@@ -2759,12 +2766,12 @@ function spc_render_pagespeed_page() {
 
     // CSS圧縮状態によってプロンプト文言を変更
     $css_minify_note = !empty($spc_settings['tuning_css_minify']) && !$spc_is_litespeed
-        ? '- CSS圧縮（コメント・空白除去）はSmile Performanceで対応済みです。\\n'
-        : '- CSS圧縮・HTML圧縮はBricks Builderと干渉するため非対応です。\\n';
+        ? '- CSS圧縮（コメント・空白除去）はSmile Performanceで対応済み。\\n'
+        : '- CSS圧縮・HTML圧縮はBricks BuilderもしくはLiteSpeed Cacheと干渉するため非対応。\\n';
 
     // noindex状態のプロンプト文言
     $noindex_note = $spc_noindex
-        ? ' +"- 制作中サイトのためnoindexを有効化しています（SEOスコアは参考値です）。\\n"'
+        ? ' +"- 制作中サイトのためnoindexを有効化。\\n"'
         : '';
 
     // BricksのCSS読み込み方法を取得
@@ -2775,7 +2782,7 @@ function spc_render_pagespeed_page() {
         'inline'      => 'インラインスタイル（デフォルト）',
         default       => $bricks_css_loading,
     };
-    $bricks_css_note = '- BricksのCSS読み込み方法は「' . $bricks_css_label . '」に設定しています。\\n';
+    $bricks_css_note = '- BricksのCSS読み込み方法は「' . $bricks_css_label . '」に設定。\\n';
 
     $html .= '  var prompt = "【前提条件】\\n"';
     $html .= '    +"このサイトはSmile Performanceプラグインを使用しています。\\n"';
@@ -3205,6 +3212,15 @@ function spc_render_changelog_page() {
 
     $changelog = [
         [
+            'version' => '1.29',
+            'date'    => '2026-04-07',
+            'changes' => [
+                'AIプロンプト：各前提条件の文末表記を統一（ですます調を除去）',
+                'AIプロンプト：CSS圧縮オフ時の文言にLiteSpeed Cacheを追加',
+                'LCPヒーロー画像：ブレークポイント設定の備考欄を追加',
+            ],
+        ],
+        [
             'version' => '1.28',
             'date'    => '2026-04-06',
             'changes' => [
@@ -3429,7 +3445,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.28');
+        $is_current = ($release['version'] === '1.29');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
