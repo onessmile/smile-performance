@@ -3,7 +3,7 @@
  * Plugin Name: Smile Performance
  * Plugin URI:  https://hp4.me/
  * Description: Bricks Builder向け高速化・キャッシュ最適化プラグイン。LiteSpeed Cache併用モード対応。
- * Version:     1.29
+ * Version:     1.31
  * Author:      One's Smile
  * License:     GPL-2.0-or-later
  * Text Domain: smile-performance
@@ -2899,9 +2899,96 @@ function spc_register_psi_image_size() {
 
 // WebP設定の登録
 add_action('admin_init', 'spc_webp_settings_init');
+
+// メディアライブラリ：添付ファイル詳細画面にpsi-fit-pc再生成UIを追加
+add_filter('attachment_fields_to_edit', 'spc_add_psi_regen_field', 10, 2);
+function spc_add_psi_regen_field($form_fields, $post) {
+    if (get_option('spc_webp_enable', 'yes') !== 'yes') return $form_fields;
+    if ($post->post_mime_type !== 'image/webp') return $form_fields;
+
+    $meta    = wp_get_attachment_metadata($post->ID);
+    $orig_w  = $meta['width']  ?? 0;
+    $orig_h  = $meta['height'] ?? 0;
+    if (max($orig_w, $orig_h) < 1080) return $form_fields;
+
+    $has_psi    = !empty($meta['sizes']['psi-fit-pc']);
+    $psi_file   = $has_psi ? $meta['sizes']['psi-fit-pc']['file'] : '';
+    $psi_w      = $has_psi ? $meta['sizes']['psi-fit-pc']['width'] : '-';
+    $psi_h      = $has_psi ? $meta['sizes']['psi-fit-pc']['height'] : '-';
+    $psi_size   = '';
+    if ($has_psi) {
+        $psi_path = path_join(dirname(get_attached_file($post->ID)), $psi_file);
+        if (file_exists($psi_path)) $psi_size = round(filesize($psi_path) / 1024, 1) . ' KiB';
+    }
+    $nonce      = wp_create_nonce('spc_psi_single_nonce');
+    $default_q  = (int) get_option('spc_webp_psi_quality', 50);
+    $status_txt = $has_psi
+        ? 'psi-fit-pc あり（' . $psi_w . '×' . $psi_h . ' / ' . $psi_size . '）'
+        : 'psi-fit-pc 未生成';
+
+    $html  = '<div style="font-size:12px;margin-bottom:6px;color:#555;">' . esc_html($status_txt) . '</div>';
+    $html .= '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+    $html .= '<label style="font-size:12px;">品質：</label>';
+    $html .= '<input type="number" id="spc_psi_quality_' . $post->ID . '" value="' . esc_attr($default_q) . '" min="1" max="100" style="width:60px;">';
+    $html .= '<button type="button" class="button button-small spc-psi-regen-btn"';
+    $html .= ' data-id="' . esc_attr($post->ID) . '"';
+    $html .= ' data-nonce="' . esc_attr($nonce) . '"';
+    $html .= ' data-ajaxurl="' . esc_url(admin_url('admin-ajax.php')) . '">';
+    $html .= $has_psi ? '再生成' : '生成';
+    $html .= '</button>';
+    $html .= '<span class="spc-psi-regen-result" style="font-size:12px;"></span>';
+    $html .= '</div>';
+    $html .= '<script>
+(function(){
+  document.addEventListener("click", function(e){
+    if (!e.target.classList.contains("spc-psi-regen-btn")) return;
+    var btn = e.target;
+    var id  = btn.dataset.id;
+    var q   = document.getElementById("spc_psi_quality_" + id).value;
+    var res = btn.parentNode.querySelector(".spc-psi-regen-result");
+    btn.disabled = true;
+    btn.textContent = "処理中...";
+    res.textContent = "";
+    var fd = new FormData();
+    fd.append("action", "spc_regenerate_psi_single");
+    fd.append("nonce", btn.dataset.nonce);
+    fd.append("attachment_id", id);
+    fd.append("quality", q);
+    fetch(btn.dataset.ajaxurl, {method:"POST", body:fd})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        btn.disabled = false;
+        if (d.success) {
+          btn.textContent = "再生成";
+          res.style.color = "#00a32a";
+          res.textContent = "✓ 完了 " + d.data.file + " (" + d.data.size_kb + " KiB / 品質" + d.data.quality + ")";
+        } else {
+          btn.textContent = "再生成";
+          res.style.color = "#d63638";
+          res.textContent = "✗ " + d.data;
+        }
+      })
+      .catch(function(){
+        btn.disabled = false;
+        btn.textContent = "再生成";
+        res.style.color = "#d63638";
+        res.textContent = "通信エラー";
+      });
+  });
+})();
+</script>';
+
+    $form_fields['spc_psi_regen'] = [
+        'label' => 'PSI-fit-PC',
+        'input' => 'html',
+        'html'  => $html,
+    ];
+    return $form_fields;
+}
 function spc_webp_settings_init() {
     register_setting('spc_webp_settings_group', 'spc_webp_enable');
     register_setting('spc_webp_settings_group', 'spc_webp_quality', 'intval');
+    register_setting('spc_webp_settings_group', 'spc_webp_psi_quality', 'intval');
     register_setting('spc_webp_settings_group', 'spc_webp_max_size', 'intval');
     register_setting('spc_webp_settings_group', 'spc_webp_is_configured');
     register_setting('spc_webp_settings_group', 'spc_webp_active_sizes', array('sanitize_callback' => 'spc_webp_sanitize_sizes'));
@@ -2933,9 +3020,20 @@ function spc_webp_convert_on_upload($upload, $context) {
     $quality  = (int) get_option('spc_webp_quality', 75);
     if ($max_size > 0) {
         $size = $editor->get_size();
-        if (!is_wp_error($size)) {
-            if ($size['width'] > $max_size || $size['height'] > $max_size) {
-                $editor->resize($max_size, $max_size, false);
+        if (is_wp_error($size)) {
+            // get_size()が失敗した場合はgetimagesizeで直接取得
+            $img_info = @getimagesize($file_path);
+            if ($img_info) {
+                $size = ['width' => $img_info[0], 'height' => $img_info[1]];
+            }
+        }
+        if (!is_wp_error($size) && is_array($size)) {
+            if ((int)($size['width'] ?? 0) > $max_size || (int)($size['height'] ?? 0) > $max_size) {
+                $resized = $editor->resize($max_size, $max_size, false);
+                // リサイズ失敗時もログに記録して続行
+                if (is_wp_error($resized)) {
+                    error_log('Smile Performance: resize failed for ' . $file_path . ' - ' . $resized->get_error_message());
+                }
             }
         }
     }
@@ -2976,6 +3074,67 @@ function spc_webp_filter_image_sizes($new_sizes, $image_meta, $attachment_id) {
         }
     }
     return $new_sizes;
+}
+
+// AJAX: 個別画像のpsi-fit-pc再生成
+add_action('wp_ajax_spc_regenerate_psi_single', 'spc_regenerate_psi_single');
+function spc_regenerate_psi_single() {
+    check_ajax_referer('spc_psi_single_nonce', 'nonce');
+    if (!current_user_can('manage_options')) wp_die('Unauthorized');
+
+    $attachment_id = (int)($_POST['attachment_id'] ?? 0);
+    $quality       = (int)($_POST['quality'] ?? 50);
+    $quality       = max(1, min(100, $quality));
+
+    if (!$attachment_id) wp_send_json_error('IDが不正です');
+
+    $file = get_attached_file($attachment_id);
+    if (!$file || !file_exists($file)) wp_send_json_error('ファイルが見つかりません');
+
+    $meta = wp_get_attachment_metadata($attachment_id);
+    if (!$meta) wp_send_json_error('メタデータが取得できません');
+
+    // 元画像サイズ確認
+    $orig_w = $meta['width']  ?? 0;
+    $orig_h = $meta['height'] ?? 0;
+    $orig_long = max($orig_w, $orig_h);
+    if ($orig_long < 1080) wp_send_json_error('元画像が1080px未満のためスキップ');
+
+    // 既存psi-fit-pcを削除
+    if (!empty($meta['sizes']['psi-fit-pc'])) {
+        $old = path_join(dirname($file), $meta['sizes']['psi-fit-pc']['file']);
+        if (file_exists($old)) @unlink($old);
+        unset($meta['sizes']['psi-fit-pc']);
+    }
+
+    $editor = wp_get_image_editor($file);
+    if (is_wp_error($editor)) wp_send_json_error('エディタ初期化失敗: ' . $editor->get_error_message());
+
+    $editor->resize(1080, 9999, false);
+    $editor->set_quality($quality);
+
+    $path_info = pathinfo($file);
+    $sz        = $editor->get_size();
+    $new_name  = $path_info['filename'] . '-1366x' . $sz['height'] . '.webp';
+    $new_path  = $path_info['dirname'] . '/' . $new_name;
+    $saved     = $editor->save($new_path, 'image/webp');
+
+    if (is_wp_error($saved)) wp_send_json_error('保存失敗: ' . $saved->get_error_message());
+
+    $meta['sizes']['psi-fit-pc'] = [
+        'file'      => basename($saved['path']),
+        'width'     => $saved['width'],
+        'height'    => $saved['height'],
+        'mime-type' => 'image/webp',
+    ];
+    wp_update_attachment_metadata($attachment_id, $meta);
+
+    $size_kb = round(filesize($saved['path']) / 1024, 1);
+    wp_send_json_success([
+        'file'    => basename($saved['path']),
+        'size_kb' => $size_kb,
+        'quality' => $quality,
+    ]);
 }
 
 // AJAX: 既存WebP画像への一括PSI-fit-pc生成
@@ -3031,7 +3190,7 @@ function spc_generate_psi_bulk() {
         if (is_wp_error($editor)) { $errors++; continue; }
 
         $editor->resize(1080, 9999, false);
-        $editor->set_quality((int)get_option('spc_webp_quality', 75));
+        $editor->set_quality((int)get_option('spc_webp_psi_quality', 50));
 
         $path_info = pathinfo($file);
         $new_name  = $path_info['filename'] . '-1366x' . $editor->get_size()['height'] . '.webp';
@@ -3112,6 +3271,15 @@ function spc_render_webp_page() {
     echo '<td>';
     echo '<input type="number" id="spc_webp_quality" name="spc_webp_quality" value="' . esc_attr($quality) . '" min="1" max="100">';
     echo '<p class="description">1〜100の範囲で指定。デフォルトは「75」です。</p>';
+    echo '</td>';
+    echo '</tr>';
+
+    $psi_quality = (int) get_option('spc_webp_psi_quality', 50);
+    echo '<tr>';
+    echo '<th scope="row"><label for="spc_webp_psi_quality">PSI-fit-PC 圧縮品質</label></th>';
+    echo '<td>';
+    echo '<input type="number" id="spc_webp_psi_quality" name="spc_webp_psi_quality" value="' . esc_attr($psi_quality) . '" min="1" max="100">';
+    echo '<p class="description">psi-fit-pc（1080px）サムネイル専用の圧縮品質です。<br>1366px以下の表示用のため低めの設定を推奨。デフォルトは「50」です。</p>';
     echo '</td>';
     echo '</tr>';
 
@@ -3211,6 +3379,21 @@ function spc_render_changelog_page() {
     if (!current_user_can('manage_options')) return;
 
     $changelog = [
+        [
+            'version' => '1.31',
+            'date'    => '2026-04-11',
+            'changes' => [
+                'メディアライブラリ：WebP画像の詳細画面にpsi-fit-pc個別再生成機能を追加（品質指定可能）',
+            ],
+        ],
+        [
+            'version' => '1.30',
+            'date'    => '2026-04-11',
+            'changes' => [
+                'WebP変換：大きなファイル（7000px超など）でリサイズが適用されないバグを修正（getimagesizeフォールバック追加）',
+                'WebP変換：psi-fit-pc専用の圧縮品質設定を追加（デフォルト50・設定画面で変更可能）',
+            ],
+        ],
         [
             'version' => '1.29',
             'date'    => '2026-04-07',
@@ -3445,7 +3628,7 @@ function spc_render_changelog_page() {
     foreach ($changelog as $release) {
         $ver   = esc_html($release['version']);
         $date  = esc_html($release['date']);
-        $is_current = ($release['version'] === '1.29');
+        $is_current = ($release['version'] === '1.31');
 
         echo '<div style="background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:16px 20px;margin-bottom:16px;">';
         echo '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">';
